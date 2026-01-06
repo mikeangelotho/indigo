@@ -1,0 +1,10 @@
+{
+  "09b367bc-ac93-4d03-9db6-064d82460181": {
+    "id": "09b367bc-ac93-4d03-9db6-064d82460181",
+    "name": "f",
+    "system_prompt": "You are a helpful AI assistant.",
+    "model": "./models/models--unsloth--Qwen2.5-Omni-7B-GGUF/snapshots/f9bbd33a2931371b336c3d48532bb278a478471d/Qwen2.5-Omni-7B-Q8_0.gguf",
+    "created_at": 1767654236,
+    "status": "Online"
+  }
+}

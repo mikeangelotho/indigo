@@ -1,0 +1,197 @@
+syntax = "proto3";
+
+package inference;
+
+service InferenceService {
+  rpc RegisterNode (NodeRegistration) returns (RegistrationResponse);
+  rpc RunInference (InferenceRequest) returns (stream InferenceResponse);
+  rpc Ping (PingRequest) returns (PingResponse);
+  rpc HandleMcp (McpRequest) returns (McpResponse);
+  rpc ExecuteTool (ToolExecutionRequest) returns (ToolExecutionResponse);
+  rpc GetNodeTools (NodeToolsRequest) returns (NodeToolsResponse);
+  rpc RegisterTool (ToolRegistryRequest) returns (ToolRegistryResponse);
+  rpc UnregisterTool (ToolUnregisterRequest) returns (ToolRegistryResponse);
+  rpc UpdateTool (ToolUpdateRequest) returns (ToolRegistryResponse);
+  rpc ListTools (ToolListRequest) returns (ToolListResponse);
+  rpc ExecuteMcpTool (McpToolExecutionRequest) returns (McpToolExecutionResponse);
+}
+
+message McpRequest {
+  string json_message = 1;
+}
+
+message McpResponse {
+  string json_response = 1;
+}
+
+message PingRequest {}
+message PingResponse {
+  bool active = 1;
+}
+
+message NodeRegistration {
+  string node_id = 1;
+  string address = 2;
+  uint32 port = 3;
+  string model_name = 4;
+}
+
+message RegistrationResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message InferenceRequest {
+  string prompt = 1;
+  uint32 max_tokens = 2;
+  float temperature = 3;
+  bytes image_data = 4;
+  repeated string stop = 5;
+  string model_name = 6;
+}
+
+message InferenceResponse {
+  string token = 1;
+  enum Status {
+    STREAMING = 0;
+    SUCCESS = 1;
+    ERROR = 2;
+    TOOL_CALL = 3;
+  }
+  Status status = 2;
+  string error_message = 3;
+  ToolCall tool_call = 4;
+}
+
+message ToolCall {
+  string function_name = 1;
+  string arguments_json = 2;
+}
+
+message ToolExecutionRequest {
+  string tool_name = 1;
+  string arguments_json = 2;
+  string context_id = 3;
+}
+
+message ToolExecutionResponse {
+  string result = 1;
+  string error = 2;
+  bool success = 3;
+}
+
+message NodeToolsRequest {}
+
+message NodeToolsResponse {
+  repeated ToolDefinition tools = 1;
+  string node_id = 2;
+  string model_name = 3;
+}
+
+message ToolDefinition {
+  string name = 1;
+  string description = 2;
+  string parameters_schema = 3;
+  string required = 4;
+  string id = 5;
+  ToolType type = 6;
+  ToolConfig config = 7;
+  repeated string permissions = 8;
+  bool node_compatible = 9;
+  string created_at = 10;
+  string updated_at = 11;
+}
+
+enum ToolType {
+  NATIVE = 0;
+  WASM = 1;
+  HTTP = 2;
+  MCP = 3;
+  CLI = 4;
+}
+
+message ToolConfig {
+  oneof config {
+    WasmConfig wasm = 1;
+    HttpConfig http = 2;
+    McpConfig mcp = 3;
+    CliConfig cli = 4;
+    NativeConfig native = 5;
+  }
+}
+
+message NativeConfig {
+  string name = 1;
+}
+
+message WasmConfig {
+  string module_path = 1;
+  string function_name = 2;
+  map<string, string> environment = 3;
+  uint32 memory_limit = 4;
+  uint32 timeout = 5;
+}
+
+message HttpConfig {
+  string endpoint = 1;
+  string method = 2;
+  map<string, string> headers = 3;
+  string auth_type = 4;
+  string auth_token = 5;
+  bool verify_ssl = 6;
+}
+
+message McpConfig {
+  string server_name = 1;
+  string server_type = 2; // "stdio" or "http"
+  repeated string args = 3;
+  map<string, string> environment = 4;
+  string endpoint = 5; // for http type
+}
+
+message CliConfig {
+  string command = 1;
+  repeated string args = 2;
+  string working_dir = 3;
+  map<string, string> environment = 4;
+  uint32 timeout = 5;
+}
+
+message ToolRegistryRequest {
+  ToolDefinition tool = 1;
+}
+
+message ToolUnregisterRequest {
+  string tool_id = 1;
+}
+
+message ToolUpdateRequest {
+  string tool_id = 1;
+  ToolDefinition tool = 2;
+}
+
+message ToolRegistryResponse {
+  bool success = 1;
+  string message = 2;
+  ToolDefinition tool = 3;
+}
+
+message ToolListRequest {
+  string tool_type = 1; // optional filter
+}
+
+message ToolListResponse {
+  repeated ToolDefinition tools = 1;
+}
+
+message McpToolExecutionRequest {
+  string server_name = 1;
+  string tool_name = 2;
+  string arguments_json = 3;
+}
+
+message McpToolExecutionResponse {
+  string result = 1;
+  bool success = 2;
+  string error = 3;
+}
