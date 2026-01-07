@@ -14,12 +14,21 @@ export type TextPart = { type: 'text'; text: string };
 export type ImagePart = { type: 'image_url'; image_url: { url: string } };
 export type MessageContent = string | (TextPart | ImagePart)[];
 
+export interface ToolCall {
+  id: string;
+  function_name: string;
+  arguments: string;
+  result?: string;
+  status?: "pending" | "executing" | "completed" | "error";
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant" | "system";
   content: MessageContent;
   attachments?: Attachment[];
   timestamp: number;
+  toolCalls?: ToolCall[];
 }
 
 export interface Conversation {
@@ -167,5 +176,38 @@ export const chatActions = {
 
   clearHistory: (agentId: string) => {
       setChatStore("conversations", (prev) => prev.filter(c => c.agentId !== agentId));
-  }
+  },
+
+  addToolCall: (conversationId: string, messageId: string, toolCall: Omit<ToolCall, "id">) => {
+    const newToolCall: ToolCall = {
+      ...toolCall,
+      id: generateUUID(),
+    };
+    
+    setChatStore(
+      "conversations",
+      (c) => c.id === conversationId,
+      "messages",
+      (m) => m.id === messageId,
+      "toolCalls",
+      (existing = []) => [...existing, newToolCall]
+    );
+    
+    setChatStore("conversations", (c) => c.id === conversationId, "updatedAt", Date.now());
+  },
+
+  updateToolCall: (conversationId: string, messageId: string, toolCallId: string, updates: Partial<ToolCall>) => {
+    setChatStore(
+      "conversations",
+      (c) => c.id === conversationId,
+      "messages",
+      (m) => m.id === messageId,
+      "toolCalls",
+      (toolCalls = []) => toolCalls?.map(tc => 
+        tc.id === toolCallId ? { ...tc, ...updates } : tc
+      )
+    );
+    
+    setChatStore("conversations", (c) => c.id === conversationId, "updatedAt", Date.now());
+  },
 };

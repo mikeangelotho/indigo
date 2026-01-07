@@ -175,6 +175,14 @@ export default function AgentDetail() {
     }
 
     ws = new WebSocket(wsUrl);
+    
+    // Set initial "connecting" state immediately
+    chatActions.updateMessageContent(
+      convId,
+      assistantMsgId,
+      "..."
+    );
+    
     ws.onopen = () => {
       const history = conv.messages
         .filter((m) => m.id !== assistantMsgId)
@@ -197,17 +205,59 @@ export default function AgentDetail() {
     ws.onmessage = (event) => {
       try {
         const msgData = JSON.parse(event.data);
+        
+        // Handle token content
         if (msgData.token) {
           const currentContent =
             chatStore.conversations
               .find((c) => c.id === convId)
               ?.messages.find((m) => m.id === assistantMsgId)?.content || "";
+          
+          // Clear initial "..." state on first real token
+          const updatedContent = currentContent === "..." ? msgData.token : currentContent + msgData.token;
+          
           chatActions.updateMessageContent(
             convId,
             assistantMsgId,
-            currentContent + msgData.token
+            updatedContent
           );
         }
+        
+        // Handle ToolCall status messages
+        if (typeof msgData.status === "object" && "ToolCall" in msgData.status) {
+          const toolCall = msgData.status.ToolCall;
+          console.log("ToolCall detected:", toolCall);
+          
+          // Add or update tool call
+          const conversation = chatStore.conversations.find(c => c.id === convId);
+          const message = conversation?.messages.find(m => m.id === assistantMsgId);
+          
+          if (message) {
+            // Check if this tool call already exists
+            const existingToolCall = message.toolCalls?.find(tc => 
+              tc.function_name === toolCall.function_name && 
+              tc.arguments === toolCall.arguments_json
+            );
+            
+            if (existingToolCall) {
+              // Update existing tool call
+              chatActions.updateToolCall(convId, assistantMsgId, existingToolCall.id, {
+                result: msgData.token || "",
+                status: "completed"
+              });
+            } else {
+              // Add new tool call
+              chatActions.addToolCall(convId, assistantMsgId, {
+                function_name: toolCall.function_name,
+                arguments: toolCall.arguments_json,
+                result: msgData.token || "",
+                status: "completed"
+              });
+            }
+          }
+        }
+        
+        // Handle completion or error
         if (
           msgData.status === "Success" ||
           (typeof msgData.status === "object" && "Error" in msgData.status)
@@ -215,7 +265,7 @@ export default function AgentDetail() {
           ws?.close();
         }
       } catch (err) {
-        console.error(err);
+        console.error("WebSocket message error:", err);
       }
     };
 

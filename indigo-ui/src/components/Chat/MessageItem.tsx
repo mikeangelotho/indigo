@@ -1,7 +1,7 @@
-import { createMemo, createEffect, Show, onMount, onCleanup } from "solid-js";
-import { Message } from "~/lib/chatStore";
+import { createMemo, createEffect, Show, onMount, onCleanup, For } from "solid-js";
+import { Message, ToolCall } from "~/lib/chatStore";
 import { marked } from "marked";
-import { User, Bot, Edit2, Copy, Check, File, BrainCircuit, ChevronDown } from "lucide-solid";
+import { User, Bot, Edit2, Copy, Check, File, BrainCircuit, ChevronDown, Terminal, Settings, CheckCircle, AlertCircle } from "lucide-solid";
 import { createSignal } from "solid-js";
 import hljs from "highlight.js";
 import "highlight.js/styles/atom-one-dark.css";
@@ -15,7 +15,84 @@ interface MessageItemProps {
 
 // SVG Icons as strings for the HTML renderer
 const COPY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
-const CHECK_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+const CHECK_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke="join="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+
+// ToolCall Component
+function ToolCallItem(props: { toolCall: ToolCall }) {
+  const [isExpanded, setIsExpanded] = createSignal(false);
+  
+  const getStatusIcon = () => {
+    switch (props.toolCall.status) {
+      case "completed":
+        return <CheckCircle size={14} class="text-green-400" />;
+      case "error":
+        return <AlertCircle size={14} class="text-red-400" />;
+      case "executing":
+        return <Terminal size={14} class="text-yellow-400 animate-pulse" />;
+      default:
+        return <Settings size={14} class="text-blue-400" />;
+    }
+  };
+  
+  const getStatusText = () => {
+    switch (props.toolCall.status) {
+      case "completed":
+        return "Completed";
+      case "error":
+        return "Error";
+      case "executing":
+        return "Executing";
+      default:
+        return "Pending";
+    }
+  };
+  
+  return (
+    <div class="mb-3 border border-zinc-800 rounded-lg bg-zinc-900/50 overflow-hidden">
+      <button
+        onClick={() => setIsExpanded(!isExpanded())}
+        class="w-full px-3 py-2 flex items-center justify-between gap-2 hover:bg-zinc-800/50 transition-colors"
+      >
+        <div class="flex items-center gap-2">
+          <Terminal size={14} class="text-indigo-400" />
+          <span class="text-sm font-medium text-white">
+            {props.toolCall.function_name}
+          </span>
+          <span class="text-xs text-zinc-400">
+            ({getStatusText()})
+          </span>
+        </div>
+        <div class="flex items-center gap-2">
+          {getStatusIcon()}
+          <ChevronDown 
+            size={14} 
+            class={`text-zinc-400 transition-transform duration-200 ${isExpanded() ? "rotate-180" : ""}`}
+          />
+        </div>
+      </button>
+      
+      <Show when={isExpanded()}>
+        <div class="border-t border-zinc-800 px-3 py-2 space-y-2">
+          <div>
+            <div class="text-xs font-medium text-zinc-500 mb-1">Arguments:</div>
+            <pre class="text-xs text-zinc-300 bg-zinc-950 p-2 rounded border border-zinc-800 overflow-x-auto">
+              {JSON.stringify(JSON.parse(props.toolCall.arguments || "{}"), null, 2)}
+            </pre>
+          </div>
+          
+          <Show when={props.toolCall.result}>
+            <div>
+              <div class="text-xs font-medium text-zinc-500 mb-1">Result:</div>
+              <pre class="text-xs text-zinc-300 bg-zinc-950 p-2 rounded border border-zinc-800 overflow-x-auto whitespace-pre-wrap">
+                {props.toolCall.result}
+              </pre>
+            </div>
+          </Show>
+        </div>
+      </Show>
+    </div>
+  );
+}
 
 export default function MessageItem(props: MessageItemProps) {
   const [copied, setCopied] = createSignal(false);
@@ -36,7 +113,7 @@ export default function MessageItem(props: MessageItemProps) {
     return "";
   };
 
-  // Smooth Streaming Logic
+  // Enhanced Smooth Streaming Logic
   createEffect(() => {
     const target = getTextContent(props.message.content);
     
@@ -46,23 +123,51 @@ export default function MessageItem(props: MessageItemProps) {
         return;
     }
 
-    // If streaming, catch up smoothly
+    // Handle connecting state ("...")
+    if (target === "...") {
+        setDisplayedText("...");
+        return;
+    }
+
+    // If streaming, catch up smoothly with natural typing simulation
     const current = displayedText();
     
     if (current.length < target.length) {
-         // Determine "catch up" speed
+         // Natural typing simulation: variable speeds for realistic feel
          const distance = target.length - current.length;
-         // If far behind (e.g. paste or fast token generation), speed up.
-         // Min speed 1 char/frame (~60 chars/sec). Max speed adaptive.
-         const speed = distance > 50 ? 5 : (distance > 20 ? 3 : 1);
          
-         let frameId = requestAnimationFrame(() => {
+         let speed: number;
+         let delay: number;
+         
+         if (distance > 100) {
+             // Far behind: faster catch-up for responsiveness
+             speed = 8;
+             delay = 16; // ~60fps
+         } else if (distance > 50) {
+             speed = 4;
+             delay = 25; // ~40fps
+         } else if (distance > 10) {
+             speed = 2;
+             delay = 50; // ~20fps
+         } else {
+             // Very close: single character natural typing
+             speed = 1;
+             delay = 80; // More realistic typing pace
+         }
+         
+         // Add slight randomization for more natural feel
+         const randomizedDelay = delay + Math.random() * 20 - 10;
+         
+         let timeoutId = setTimeout(() => {
              setDisplayedText(target.slice(0, current.length + speed));
-         });
+         }, randomizedDelay);
          
-         onCleanup(() => cancelAnimationFrame(frameId));
+         onCleanup(() => clearTimeout(timeoutId));
     } else if (current.length > target.length) {
-        // If target shrunk (e.g. correction/reset), sync immediately
+        // If target shrunk (e.g. correction/reset from "..." to content), sync immediately
+        setDisplayedText(target);
+    } else if (current === "..." && target !== "...") {
+        // Transition from connecting to actual content
         setDisplayedText(target);
     }
   });
@@ -338,43 +443,68 @@ export default function MessageItem(props: MessageItemProps) {
               </div>
             }
           >
-             {/* Thinking Process Section */}
-             <Show when={parsedContent().thought}>
-                <div class="mb-4">
-                    <button 
-                        onClick={() => setIsThinkingExpanded(!isThinkingExpanded())}
-                        class="flex items-center gap-2 text-xs font-medium text-zinc-500 hover:text-zinc-300 transition-colors bg-zinc-900/50 px-3 py-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 w-full sm:w-auto"
-                    >
-                        <BrainCircuit size={14} class={isThinkingExpanded() ? "text-indigo-400" : ""} />
-                        <span>Thinking Process</span>
-                        <ChevronDown 
-                            size={14} 
-                            class={`transition-transform duration-200 ${isThinkingExpanded() ? "rotate-180" : ""}`}
-                        />
-                    </button>
-                    <Show when={isThinkingExpanded()}>
-                        <div class="mt-2 pl-3 border-l-2 border-zinc-800 text-sm text-zinc-400 italic font-mono leading-relaxed animate-in fade-in slide-in-from-top-1 duration-200 whitespace-pre-wrap">
-                           {parsedContent().thought}
-                           {/* Add blinking cursor to thought if it's the active part and streaming */}
-                           <Show when={props.isStreaming && !parsedContent().content && displayedText().endsWith(parsedContent().thought!)}>
-                                <span class="cursor-blink"></span>
-                           </Show>
-                        </div>
-                    </Show>
-                </div>
-             </Show>
+            {/* Show connecting state when displayedText is "..." */}
+            <Show 
+              when={displayedText() === "..." && props.isStreaming}
+              fallback={
+                <>
+                  {/* Thinking Process Section */}
+                  <Show when={parsedContent().thought}>
+                    <div class="mb-4">
+                        <button 
+                            onClick={() => setIsThinkingExpanded(!isThinkingExpanded())}
+                            class="flex items-center gap-2 text-xs font-medium text-zinc-500 hover:text-zinc-300 transition-colors bg-zinc-900/50 px-3 py-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 w-full sm:w-auto"
+                        >
+                            <BrainCircuit size={14} class={isThinkingExpanded() ? "text-indigo-400" : ""} />
+                            <span>Thinking Process</span>
+                            <ChevronDown 
+                                size={14} 
+                                class={`transition-transform duration-200 ${isThinkingExpanded() ? "rotate-180" : ""}`}
+                            />
+                        </button>
+                        <Show when={isThinkingExpanded()}>
+                            <div class="mt-2 pl-3 border-l-2 border-zinc-800 text-sm text-zinc-400 italic font-mono leading-relaxed animate-in fade-in slide-in-from-top-1 duration-200 whitespace-pre-wrap">
+                               {parsedContent().thought}
+                               {/* Add blinking cursor to thought if it's the active part and streaming */}
+                               <Show when={props.isStreaming && !parsedContent().content && displayedText().endsWith(parsedContent().thought!)}>
+                                    <span class="cursor-blink"></span>
+                               </Show>
+                            </div>
+                        </Show>
+                    </div>
+                   </Show>
 
-            <div
-              ref={contentRef}
-              class="prose prose-invert prose-base max-w-none text-zinc-300 leading-relaxed
-                         prose-pre:bg-zinc-950 prose-pre:border prose-pre:border-zinc-800 prose-pre:rounded-lg prose-pre:p-4
-                         prose-code:text-indigo-300 prose-code:bg-zinc-800/50 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-code:text-base
-                         prose-a:text-indigo-400 prose-a:no-underline hover:prose-a:underline
-                         prose-table:border-collapse prose-th:border prose-th:border-zinc-700 prose-th:p-2 prose-td:border prose-td:border-zinc-700 prose-td:p-2"
-              innerHTML={htmlContent()}
-              onClick={handleContentClick}
-            />
-          </Show>
+                   {/* Tool Calls Section */}
+                   <Show when={props.message.toolCalls && props.message.toolCalls.length > 0}>
+                     <div class="mb-4">
+                       <div class="text-xs font-medium text-zinc-500 mb-2">Tool Calls</div>
+                       <For each={props.message.toolCalls}>
+                         {(toolCall) => <ToolCallItem toolCall={toolCall} />}
+                       </For>
+                     </div>
+                   </Show>
+
+                   <div
+                     ref={contentRef}
+                     class="prose prose-invert prose-base max-w-none text-zinc-300 leading-relaxed
+                                prose-pre:bg-zinc-950 prose-pre:border prose-pre:border-zinc-800 prose-pre:rounded-lg prose-pre:p-4
+                                prose-code:text-indigo-300 prose-code:bg-zinc-800/50 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-code:text-base
+                                prose-a:text-indigo-400 prose-a:no-underline hover:prose-a:underline
+                                prose-table:border-collapse prose-th:border prose-th:border-zinc-700 prose-th:p-2 prose-td:border prose-td:border-zinc-700 prose-td:p-2"
+                     innerHTML={htmlContent()}
+                     onClick={handleContentClick}
+                   />
+                </>
+              }
+            >
+              <div class="flex gap-2 items-center py-3 pl-1">
+                <div class="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></div>
+                <div class="w-2 h-2 bg-indigo-400 rounded-full animate-pulse [animation-delay:0.2s]"></div>
+                <div class="w-2 h-2 bg-indigo-300 rounded-full animate-pulse [animation-delay:0.4s]"></div>
+                <span class="text-xs font-medium text-indigo-300 uppercase tracking-widest animate-pulse">Connecting</span>
+              </div>
+</Show>
+           </Show>
         )}
       </div>
 

@@ -19,10 +19,11 @@ use indigo_common::{
     inference::InferenceRequest as GrpcInferenceRequest,
     inference::InferenceResponse as GrpcInferenceResponse, ChatMessage,
 };
+
 use prost::Message;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::AppState;
+use crate::{AppState, convert_common_tool_to_protobuf};
 
 #[derive(Deserialize, Debug)]
 pub struct OpenAIChatRequest {
@@ -226,6 +227,7 @@ pub async fn list_proxy_models(State(state): State<ProxyState>) -> Json<OpenAIMo
 pub struct ProxyState {
     pub target_address: String,
     pub model_name: String,
+    pub tool_registry: crate::tool_registry::SharedToolRegistry,
 }
 
 pub struct ToolParser {
@@ -428,6 +430,12 @@ let prompt_payload = serde_json::to_string(&indigo_messages).unwrap_or_default()
         }
     };
 
+    // Get tools to include in request
+    let tools = {
+        let registry = state.tool_registry.read().unwrap();
+        registry.list_tools().into_iter().map(convert_common_tool_to_protobuf).collect::<Vec<_>>()
+    };
+
     let grpc_req = GrpcInferenceRequest {
         prompt: prompt_payload,
         max_tokens: req.max_tokens.unwrap_or(4096),
@@ -435,6 +443,7 @@ let prompt_payload = serde_json::to_string(&indigo_messages).unwrap_or_default()
         image_data: image_data.unwrap_or_default(),
         stop: vec![],
         model_name: model_name.clone(),
+        tools: tools,
     };
 
     if stream_req {
@@ -755,6 +764,12 @@ pub async fn chat_completions(
     };
 
 // 2. Prepare Request
+    // Get tools to include in request
+    let tools = {
+        let registry = state.tool_registry.read().unwrap();
+        registry.list_tools().into_iter().map(convert_common_tool_to_protobuf).collect::<Vec<_>>()
+    };
+
     let grpc_req = GrpcInferenceRequest {
         prompt: prompt_payload,
         max_tokens: req.max_tokens.unwrap_or(4096),
@@ -762,6 +777,7 @@ pub async fn chat_completions(
         image_data: image_data.unwrap_or_default(),
         stop: vec![],
         model_name: model_name.clone(),
+        tools: tools,
     };
 
     // 3. Routing (Stdio vs gRPC)
@@ -816,9 +832,9 @@ pub async fn chat_completions(
                                         delta: Delta { content: Some(s), role: None, tool_calls: None },
                                         finish_reason: None,
                                     }],
-                                }).map_err(axum::Error::new);
+}).map_err(axum::Error::new);
                                 let _ = tx.send(event);
-                             }
+                            }
 
                             let event = Event::default()
                                 .json_data(OpenAIStreamResponse {
@@ -866,6 +882,7 @@ pub async fn chat_completions(
                             
                             if let Some(tc) = tool {
                                 tool_emitted = true;
+                                let tc_clone = tc.clone(); // Clone for later use
                                 let event = Event::default()
                                     .json_data(OpenAIStreamResponse {
                                         id: id_clone.clone(),
@@ -884,6 +901,45 @@ pub async fn chat_completions(
                                     })
                                     .map_err(axum::Error::new);
                                 let _ = tx.send(event);
+                                
+                                // Execute the tool using tool registry and executor
+                                let tool_output = {
+                                    let tool_def = {
+                                        let registry = state.tool_registry.read().unwrap();
+                                        registry.list_tools().into_iter().find(|t| t.name == tc_clone.function.name).cloned()
+                                    };
+                                    
+                                    if let Some(td) = tool_def {
+                                        let mut executor = state.tool_executor.write().await;
+                                        let args: serde_json::Value = serde_json::from_str(&tc_clone.function.arguments).unwrap_or_default();
+                                        match executor.execute_tool(&td, &args).await {
+                                            Ok(res) => res,
+                                            Err(e) => format!("Error executing tool: {}", e),
+                                        }
+                                    } else {
+                                        format!("Tool '{}' not found", tc_clone.function.name)
+                                    }
+                                };
+                                
+                                // Stream tool execution result
+                                let result_event = Event::default()
+                                    .json_data(OpenAIStreamResponse {
+                                        id: id_clone.clone(),
+                                        object: "chat.completion.chunk".to_string(),
+                                        created,
+                                        model: model_clone.clone(),
+                                        choices: vec![StreamChoice {
+                                            index: 0,
+                                            delta: Delta {
+                                                content: Some(format!("\n\n[Agent Output]: {}\n", tool_output)),
+                                                role: None,
+                                                tool_calls: None,
+                                            },
+                                            finish_reason: None,
+                                        }],
+                                    })
+                                    .map_err(axum::Error::new);
+                                let _ = tx.send(result_event);
                             }
                         }
                     }

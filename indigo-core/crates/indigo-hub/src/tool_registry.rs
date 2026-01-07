@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use indigo_common::{
-    CliConfig, ToolConfig, ToolDefinition, ToolType,
+    NativeConfig, ToolConfig, ToolDefinition, ToolType,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,20 +39,15 @@ impl ToolRegistry {
                         "type": "string",
                         "description": "Directory path to list (default: current directory)"
                     },
-                    "recursive": {
-                        "type": "boolean",
-                        "description": "List files recursively (default: false)",
-                        "default": false
+                    "pattern": {
+                        "type": "string",
+                        "description": "File pattern to match (default: *)"
                     }
                 }
             }),
             tool_type: ToolType::Native,
-            config: ToolConfig::Cli(CliConfig {
-                command: "ls".to_string(),
-                args: vec!["-la".to_string()],
-                working_dir: ".".to_string(),
-                environment: HashMap::new(),
-                timeout: 30,
+            config: ToolConfig::Native(NativeConfig {
+                name: "list_files".to_string(),
             }),
             permissions: vec!["file:read".to_string()],
             node_compatible: true,
@@ -86,12 +81,8 @@ impl ToolRegistry {
                 "required": ["path"]
             }),
             tool_type: ToolType::Native,
-            config: ToolConfig::Cli(CliConfig {
-                command: "cat".to_string(),
-                args: vec![],
-                working_dir: ".".to_string(),
-                environment: HashMap::new(),
-                timeout: 30,
+            config: ToolConfig::Native(NativeConfig {
+                name: "read_file".to_string(),
             }),
             permissions: vec!["file:read".to_string()],
             node_compatible: true,
@@ -109,22 +100,18 @@ impl ToolRegistry {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the file to write"
+                        "description": "Path to file to write"
                     },
                     "content": {
                         "type": "string",
-                        "description": "Content to write to the file"
+                        "description": "Content to write to file"
                     }
                 },
                 "required": ["path", "content"]
             }),
             tool_type: ToolType::Native,
-            config: ToolConfig::Cli(CliConfig {
-                command: "tee".to_string(),
-                args: vec![],
-                working_dir: ".".to_string(),
-                environment: HashMap::new(),
-                timeout: 30,
+            config: ToolConfig::Native(NativeConfig {
+                name: "write_file".to_string(),
             }),
             permissions: vec!["file:write".to_string()],
             node_compatible: true,
@@ -159,12 +146,8 @@ impl ToolRegistry {
                 "required": ["command"]
             }),
             tool_type: ToolType::Native,
-            config: ToolConfig::Cli(CliConfig {
-                command: "sh".to_string(),
-                args: vec!["-c".to_string()],
-                working_dir: ".".to_string(),
-                environment: HashMap::new(),
-                timeout: 30,
+            config: ToolConfig::Native(NativeConfig {
+                name: "bash".to_string(),
             }),
             permissions: vec!["shell:execute".to_string()],
             node_compatible: true,

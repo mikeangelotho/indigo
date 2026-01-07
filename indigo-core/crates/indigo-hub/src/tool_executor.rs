@@ -40,6 +40,7 @@ impl ToolExecutor {
     }
 
     async fn execute_native_tool(&self, config: &NativeConfig, arguments: &Value) -> Result<String> {
+        println!("TOOL_EXECUTOR: Executing native tool '{}' with args: {}", config.name, arguments);
         match config.name.as_str() {
             "bash" | "run_shell" => {
                  let cmd = arguments.get("command").or_else(|| arguments.get("cmd")).or_else(|| arguments.get("input")).and_then(|v| v.as_str())
@@ -59,7 +60,17 @@ impl ToolExecutor {
             "read" | "read_file" => {
                 let path = arguments.get("path").and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow!("Missing 'path' argument"))?;
-                std::fs::read_to_string(path).map_err(|e| anyhow!("Failed to read file: {}", e))
+                println!("TOOL_EXECUTOR: Reading file: {}", path);
+                match std::fs::read_to_string(path) {
+                    Ok(content) => {
+                        println!("TOOL_EXECUTOR: Successfully read {} bytes from {}", content.len(), path);
+                        Ok(content)
+                    },
+                    Err(e) => {
+                        println!("TOOL_EXECUTOR: Failed to read file {}: {}", path, e);
+                        Err(anyhow!("Failed to read file: {}", e))
+                    }
+                }
             }
             "write_file" => {
                 let path = arguments.get("path").and_then(|v| v.as_str())

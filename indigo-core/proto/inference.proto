@@ -48,6 +48,7 @@ message InferenceRequest {
   bytes image_data = 4;
   repeated string stop = 5;
   string model_name = 6;
+  repeated ToolDefinition tools = 7;
 }
 
 message InferenceResponse {

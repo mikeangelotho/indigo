@@ -35,6 +35,8 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::time::Duration;
+use std::time::Instant;
 use tokio_stream::Stream;
 use tonic::{transport::Server, Request, Response, Status};
 use tower_http::cors::{Any, CorsLayer};
@@ -358,9 +360,11 @@ impl InferenceService for HubGrpcService {
         );
 
         let node_id_clone = req.node_id.clone();
+        let tool_registry_clone = self.state.tool_registry.clone();
         let proxy_state = openai::ProxyState {
             target_address: req.address.clone(),
             model_name: req.model_name.clone(),
+            tool_registry: tool_registry_clone,
         };
 
         tokio::spawn(async move {
@@ -1049,7 +1053,7 @@ mod agent {
     }
 }
 
-async fn spawn_default_node() -> (Option<SidecarHandle>, Option<String>) {
+async fn spawn_default_node(gpu_layers: u32) -> (Option<SidecarHandle>, Option<String>) {
     use std::process::Stdio;
     use tokio::process::Command;
 
@@ -1170,7 +1174,7 @@ async fn spawn_default_node() -> (Option<SidecarHandle>, Option<String>) {
         .arg("--model-file")
         .arg(&model_cmd)
         .arg("--gpu-layers")
-        .arg("32")
+        .arg(gpu_layers.to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
@@ -1199,6 +1203,73 @@ async fn spawn_default_node() -> (Option<SidecarHandle>, Option<String>) {
     }
 }
 
+// Token buffer for smooth WebSocket streaming
+#[derive(Debug, Clone)]
+struct TokenBuffer {
+    content: String,
+    last_flush: std::time::Instant,
+    first_token_sent: bool,
+    token_count: usize,
+}
+
+impl TokenBuffer {
+    fn new() -> Self {
+        Self {
+            content: String::new(),
+            last_flush: Instant::now(),
+            first_token_sent: false,
+            token_count: 0,
+        }
+    }
+    
+    fn add_token(&mut self, token: &str) {
+        self.content.push_str(token);
+        self.token_count += 1;
+    }
+    
+    fn should_flush(&self, force: bool) -> bool {
+        force ||
+        // Immediate flush for first token to eliminate "thinking" delay
+        (!self.first_token_sent && !self.content.is_empty()) ||
+        // Adaptive buffering: start small, grow gradually for natural flow
+        self.content.len() >= self.get_adaptive_threshold() ||
+        // Natural timing: longer delays as conversation progresses
+        self.last_flush.elapsed() >= self.get_adaptive_delay()
+    }
+
+    fn get_adaptive_threshold(&self) -> usize {
+        match self.token_count {
+            1..=5 => 5,   // Very small chunks at start for immediate response
+            6..=15 => 15, // Small chunks for natural typing feel
+            16..=50 => 30, // Medium chunks for steady flow
+            _ => 50,       // Larger chunks for established streaming
+        }
+    }
+
+    fn get_adaptive_delay(&self) -> Duration {
+        match self.token_count {
+            1..=3 => Duration::from_millis(50),   // Quick initial response
+            4..=10 => Duration::from_millis(80),  // Natural typing pace
+            11..=30 => Duration::from_millis(120), // Comfortable reading speed
+            _ => Duration::from_millis(150),       // Steady streaming
+        }
+    }
+    
+    fn flush(&mut self) -> String {
+        let result = self.content.clone();
+        self.content.clear();
+        self.last_flush = Instant::now();
+        if !self.first_token_sent && !result.is_empty() {
+            self.first_token_sent = true;
+        }
+        result
+    }
+    
+    fn is_empty(&self) -> bool {
+        self.content.is_empty()
+    }
+}
+
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -1207,6 +1278,10 @@ struct Cli {
     /// Start the Hub with a local inference sidecar enabled
     #[arg(long)]
     with_sidecar: bool,
+    
+    /// Configure GPU layers for sidecar (default: 999)
+    #[arg(long, default_value = "999")]
+    sidecar_gpu_layers: u32,
 }
 
 #[tokio::main]
@@ -1214,7 +1289,7 @@ async fn main() {
     let args = Cli::parse();
 
     let (sidecar_handle, sidecar_model_path) = if args.with_sidecar {
-        spawn_default_node().await
+        spawn_default_node(args.sidecar_gpu_layers).await
     } else {
         println!("Starting in Orchestrator Mode (Sidecar disabled). Use --with-sidecar to enable.");
         (None, None)
@@ -1994,6 +2069,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         if let Message::Text(text) = msg {
             // USER MSG println!("{}", text);
             tokio::spawn(async move {
+                let mut token_buffer = TokenBuffer::new();
                 let mut req: InferenceRequest = match serde_json::from_str(&text) {
                     Ok(r) => r,
                     Err(e) => {
@@ -2121,6 +2197,7 @@ if let Some((name, prompt, _model)) = agent_info {
                             image_data: image_data.unwrap(),
                             stop: vec![],
                             model_name,
+                            tools: vec![],
                         };
 
                         let req_bytes = grpc_req.encode_to_vec();
@@ -2163,23 +2240,17 @@ if let Some((name, prompt, _model)) = agent_info {
                             {
                                 if resp.status == 1 {
                                     if let Some(s) = parser.flush() {
-                                        let _ = send_json(
-                                            &sender_clone,
-                                            &InferenceResponse {
-                                                token: s,
-                                                status: MessageStatus::Streaming,
-                                            },
-                                        )
-                                        .await;
+                                        let flush_resp = InferenceResponse {
+                                            token: s,
+                                            status: MessageStatus::Streaming,
+                                        };
+                                        let _ = send_json_buffered(&sender_clone, &flush_resp, &mut token_buffer, false).await;
                                     }
-                                    let _ = send_json(
-                                        &sender_clone,
-                                        &InferenceResponse {
-                                            token: "".to_string(),
-                                            status: MessageStatus::Success,
-                                        },
-                                    )
-                                    .await;
+                                    let success_resp = InferenceResponse {
+                                        token: "".to_string(),
+                                        status: MessageStatus::Success,
+                                    };
+                                    let _ = send_json_buffered(&sender_clone, &success_resp, &mut token_buffer, false).await;
                                     break;
                                 }
 
@@ -2196,18 +2267,31 @@ if let Some((name, prompt, _model)) = agent_info {
                                         .await;
                                     }
                                     if let Some(tc) = tool {
-                                        let output = agent::execute_tool(
-                                            &tc.function.name,
-                                            &tc.function.arguments,
-                                        );
-                                        let _ = send_json(
-                                            &sender_clone,
-                                            &InferenceResponse {
-                                                token: format!("\n\n[Agent Output]: {}\n", output),
-                                                status: MessageStatus::Streaming,
-                                            },
-                                        )
-                                        .await;
+                                        // Use the same ToolExecutor as gRPC nodes for consistency
+                                        let tool_def = {
+                                             let registry = state_clone.tool_registry.read().unwrap();
+                                             registry.list_tools().into_iter().find(|t| t.name == tc.function.name).cloned()
+                                        };
+
+                                        let output = if let Some(td) = tool_def {
+                                            let mut executor = state_clone.tool_executor.write().await;
+                                            let args: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                                            match executor.execute_tool(&td, &args).await {
+                                                Ok(res) => res,
+                                                Err(e) => format!("Error executing tool: {}", e),
+                                            }
+                                        } else {
+                                             format!("Error: Tool '{}' not found", tc.function.name)
+                                        };
+
+                                        let tool_resp = InferenceResponse {
+                                                token: output,
+                                                status: MessageStatus::ToolCall(ToolCallInfo {
+                                                    function_name: tc.function.name.clone(),
+                                                    arguments_json: tc.function.arguments.clone(),
+                                                }),
+                                            };
+                                        let _ = send_json_buffered(&sender_clone, &tool_resp, &mut token_buffer, false).await;
                                     }
                                 }
                             }
@@ -2261,6 +2345,12 @@ println!("Forwarding request to node at: {}", node_address);
                     if let Some(handle) = sidecar_guard.as_mut() {
                         println!("Routing to Sidecar via WebSocket...");
 
+                        // Get tools to include in request
+                        let tools = {
+                            let registry = state_clone.tool_registry.read().unwrap();
+                            registry.list_tools().into_iter().map(convert_common_tool_to_protobuf).collect::<Vec<_>>()
+                        };
+
                         let grpc_req = GrpcInferenceRequest {
                             prompt: prompt_payload,
                             max_tokens: req.max_tokens as u32,
@@ -2268,6 +2358,7 @@ println!("Forwarding request to node at: {}", node_address);
                             image_data: image_data.unwrap_or_default(),
                             stop: vec![],
                             model_name: target_model,
+                            tools: tools,
                         };
 
                         let req_bytes = grpc_req.encode_to_vec();
@@ -2302,50 +2393,56 @@ println!("Forwarding request to node at: {}", node_address);
                             if let Ok(resp) = GrpcInferenceResponse::decode(std::io::Cursor::new(msg_buf)) {
                                 if resp.status == 1 {
                                     if let Some(s) = parser.flush() {
-                                        let _ = send_json(
-                                            &sender_clone,
-                                            &InferenceResponse {
-                                                token: s,
-                                                status: MessageStatus::Streaming,
-                                            },
-                                        ).await;
+                                        let flush_resp = InferenceResponse {
+                                            token: s,
+                                            status: MessageStatus::Streaming,
+                                        };
+                                        let _ = send_json_buffered(&sender_clone, &flush_resp, &mut token_buffer, false).await;
                                     }
-                                    let _ = send_json(
-                                        &sender_clone,
-                                        &InferenceResponse {
-                                            token: "".to_string(),
-                                            status: MessageStatus::Success,
-                                        },
-                                    ).await;
+                                    let success_resp = InferenceResponse {
+                                        token: "".to_string(),
+                                        status: MessageStatus::Success,
+                                    };
+                                    let _ = send_json_buffered(&sender_clone, &success_resp, &mut token_buffer, false).await;
                                     break;
                                 }
 
                                 if !resp.token.is_empty() {
                                     let (text, tool) = parser.push(&resp.token);
                                     if let Some(t) = text {
-                                        let _ = send_json(
-                                            &sender_clone,
-                                            &InferenceResponse {
-                                                token: t,
-                                                status: MessageStatus::Streaming,
-                                            },
-                                        ).await;
+                                        let text_resp = InferenceResponse {
+                                            token: t,
+                                            status: MessageStatus::Streaming,
+                                        };
+                                        let _ = send_json_buffered(&sender_clone, &text_resp, &mut token_buffer, false).await;
                                     }
                                     if let Some(tc) = tool {
-                                        let output = agent::execute_tool(
-                                            &tc.function.name,
-                                            &tc.function.arguments,
-                                        );
-                                        let _ = send_json(
-                                            &sender_clone,
-                                            &InferenceResponse {
+                                        // Use the same ToolExecutor as gRPC nodes for consistency
+                                        let tool_def = {
+                                             let registry = state_clone.tool_registry.read().unwrap();
+                                             registry.list_tools().into_iter().find(|t| t.name == tc.function.name).cloned()
+                                        };
+
+                                        println!("SIDECAR_TOOL_EXECUTION: Executing tool '{}' via ToolExecutor", tc.function.name);
+                                        let output = if let Some(td) = tool_def {
+                                            let mut executor = state_clone.tool_executor.write().await;
+                                            let args: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                                            match executor.execute_tool(&td, &args).await {
+                                                Ok(res) => res,
+                                                Err(e) => format!("Error executing tool: {}", e),
+                                            }
+                                        } else {
+                                             format!("Error: Tool '{}' not found", tc.function.name)
+                                        };
+
+                                        let tool_resp = InferenceResponse {
                                                 token: output,
                                                 status: MessageStatus::ToolCall(ToolCallInfo {
                                                     function_name: tc.function.name.clone(),
                                                     arguments_json: tc.function.arguments.clone(),
                                                 }),
-                                            },
-                                        ).await;
+                                            };
+                                        let _ = send_json_buffered(&sender_clone, &tool_resp, &mut token_buffer, false).await;
                                     }
                                 }
                             }
@@ -2369,13 +2466,20 @@ println!("Forwarding request to node at: {}", node_address);
                     }
                 };
 
-let grpc_req = tonic::Request::new(GrpcInferenceRequest {
+                // Get tools to include in request
+                let tools = {
+                    let registry = state_clone.tool_registry.read().unwrap();
+                    registry.list_tools().into_iter().map(convert_common_tool_to_protobuf).collect::<Vec<_>>()
+                };
+
+ let grpc_req = tonic::Request::new(GrpcInferenceRequest {
                     prompt: prompt_payload,
                     max_tokens: req.max_tokens as u32,
                     temperature: req.temperature,
                     image_data: image_data.unwrap_or_default(),
                     stop: vec![],
                     model_name: target_model,
+                    tools: tools,
                 });
 
                 match client.run_inference(grpc_req).await {
@@ -2418,6 +2522,7 @@ let grpc_req = tonic::Request::new(GrpcInferenceRequest {
                                      registry.list_tools().into_iter().find(|t| t.name == info.function_name).cloned()
                                 };
 
+                                println!("GRPC_TOOL_EXECUTION: Executing tool '{}' via ToolExecutor (status-based)", info.function_name);
                                 let output = if let Some(td) = tool_def {
                                     let mut executor = state_clone.tool_executor.write().await;
                                     let args: serde_json::Value = serde_json::from_str(&info.arguments_json).unwrap_or_default();
@@ -2433,7 +2538,7 @@ let grpc_req = tonic::Request::new(GrpcInferenceRequest {
                                     token: format!("\n\n[Agent Output]: {}\n", output),
                                     status: MessageStatus::Streaming,
                                 };
-                                if let Err(_) = send_json(&sender_clone, &tool_resp).await {
+                                if let Err(_) = send_json_buffered(&sender_clone, &tool_resp, &mut token_buffer, false).await {
                                     break;
                                 }
                                 continue;
@@ -2442,15 +2547,11 @@ let grpc_req = tonic::Request::new(GrpcInferenceRequest {
                             if !resp.token.is_empty() {
                                 let (text, tool) = parser.push(&resp.token);
                                 if let Some(t) = text {
-                                    if let Err(_) = send_json(
-                                        &sender_clone,
-                                        &InferenceResponse {
-                                            token: t,
-                                            status: MessageStatus::Streaming,
-                                        },
-                                    )
-                                    .await
-                                    {
+                                    let resp = InferenceResponse {
+                                        token: t,
+                                        status: MessageStatus::Streaming,
+                                    };
+                                    if let Err(_) = send_json_buffered(&sender_clone, &resp, &mut token_buffer, false).await {
                                         break;
                                     }
                                 }
@@ -2460,6 +2561,7 @@ let grpc_req = tonic::Request::new(GrpcInferenceRequest {
                                          registry.list_tools().into_iter().find(|t| t.name == tc.function.name).cloned()
                                     };
 
+                                    println!("GRPC_TOOL_EXECUTION: Executing tool '{}' via ToolExecutor (text-based)", tc.function.name);
                                     let output = if let Some(td) = tool_def {
                                         let mut executor = state_clone.tool_executor.write().await;
                                         let args: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
@@ -2490,6 +2592,15 @@ let grpc_req = tonic::Request::new(GrpcInferenceRequest {
                         let _ =
                             send_error(&sender_clone, &format!("Inference failed: {}", e)).await;
                     }
+                }
+                
+                // Final buffer flush to ensure no tokens are left behind
+                if !token_buffer.is_empty() {
+                    let final_flush = InferenceResponse {
+                        token: token_buffer.flush(),
+                        status: MessageStatus::Streaming,
+                    };
+                    let _ = send_json(&sender_clone, &final_flush).await;
                 }
             });
         }
@@ -2526,6 +2637,59 @@ async fn send_json(
             eprintln!("WS send error: {}", e);
             axum::Error::new(e)
         })?;
+    }
+    Ok(())
+}
+
+// Buffered version for smooth streaming
+async fn send_json_buffered(
+    sender: &Arc<Mutex<futures::stream::SplitSink<WebSocket, Message>>>,
+    resp: &InferenceResponse,
+    buffer: &mut TokenBuffer,
+    bypass_buffer: bool,
+) -> Result<(), axum::Error> {
+    match resp.status {
+        MessageStatus::ToolCall(_) | MessageStatus::Success | MessageStatus::Error(_) => {
+            // Flush buffer and send immediately for tool calls, success, and errors
+            if !buffer.is_empty() {
+                let flush_resp = InferenceResponse {
+                    token: buffer.flush(),
+                    status: MessageStatus::Streaming,
+                };
+                if let Err(e) = send_json(sender, &flush_resp).await {
+                    eprintln!("Error flushing buffer during immediate send: {}", e);
+                    // Try to send the immediate message anyway
+                    return send_json(sender, resp).await;
+                }
+            }
+            send_json(sender, resp).await?;
+        }
+        MessageStatus::Queued => {
+            // Queue status - treat as immediate since it's control flow
+            send_json(sender, resp).await?;
+        }
+        MessageStatus::Streaming => {
+            if bypass_buffer {
+                // Send immediately if bypassing buffer
+                send_json(sender, resp).await?;
+            } else {
+                // Add to buffer
+                buffer.add_token(&resp.token);
+                
+                // Check if we should flush
+                if buffer.should_flush(false) {
+                    let flush_resp = InferenceResponse {
+                        token: buffer.flush(),
+                        status: MessageStatus::Streaming,
+                    };
+                    if let Err(e) = send_json(sender, &flush_resp).await {
+                        eprintln!("Error sending buffered tokens: {}", e);
+                        // Don't return error - just log and continue
+                        // Buffer will accumulate and try again on next flush
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -2572,13 +2736,20 @@ async fn trigger_inference(
         Err(e) => return Json(format!("Failed to connect to node: {}", e)),
     };
 
-let request = tonic::Request::new(GrpcInferenceRequest {
+    // Get tools to include in request
+    let tools = {
+        let registry = state.tool_registry.read().unwrap();
+        registry.list_tools().into_iter().map(convert_common_tool_to_protobuf).collect::<Vec<_>>()
+    };
+
+ let request = tonic::Request::new(GrpcInferenceRequest {
         prompt: payload.prompt,
         max_tokens: payload.max_tokens as u32,
         temperature: payload.temperature,
         image_data: vec![],
         stop: vec![],
         model_name,
+        tools: tools,
     });
 
     let mut stream = match client.run_inference(request).await {
