@@ -291,6 +291,9 @@ impl InferenceService for MyInferenceService {
                     status: 3, // TOOL_CALL
                     error_message: "".to_string(),
                     tool_call: Some(ToolCall {
+                        index: 0,
+                        id: format!("call_{}", uuid::Uuid::new_v4().simple()),
+                        r#type: "function".to_string(),
                         function_name: "list_files".to_string(),
                         arguments_json: "{}".to_string(),
                     }),
