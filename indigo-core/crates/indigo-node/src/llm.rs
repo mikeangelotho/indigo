@@ -253,7 +253,9 @@ fn apply_chat_template(model_name: &str, messages: &[ChatMessage]) -> String {
     let name = model_name.to_lowercase();
     let mut prompt = String::new();
 
+    // Enhanced template support for different model families
     if name.contains("gemma") {
+        // Gemma uses a turn-based format
         for msg in messages {
             let role = if msg.role == "assistant" { "model" } else { &msg.role };
             let content = extract_text_content(&msg.content);
@@ -261,26 +263,64 @@ fn apply_chat_template(model_name: &str, messages: &[ChatMessage]) -> String {
         }
         prompt.push_str("<start_of_turn>model\n");
     } else if name.contains("llama-3") || name.contains("llama 3") {
+        // Llama 3 uses special tokens
         prompt.push_str("<|begin_of_text|>");
         for msg in messages {
             let content = extract_text_content(&msg.content);
             prompt.push_str(&format!("<|start_header_id|>{}<|end_header_id|>\n\n{}<|eot_id|>", msg.role, content));
         }
         prompt.push_str("<|start_header_id|>assistant<|end_header_id|>\n\n");
-    } else if name.contains("phi-3") || name.contains("qwen") || name.contains("chatml") {
-         for msg in messages {
+    } else if name.contains("qwen") {
+        // Qwen models typically use ChatML format but sometimes have variations
+        if name.contains("qwen2") || name.contains("qwen-2") {
+            // Qwen2 uses ChatML
+            for msg in messages {
+                let content = extract_text_content(&msg.content);
+                prompt.push_str(&format!("<|im_start|>{}\n{}<|im_end|>\n", msg.role, content));
+            }
+            prompt.push_str("<|im_start|>assistant\n");
+        } else {
+            // Older Qwen models might use different format
+            for msg in messages {
+                let content = extract_text_content(&msg.content);
+                prompt.push_str(&format!("<|im_start|>{}\n{}<|im_end|>\n", msg.role, content));
+            }
+            prompt.push_str("<|im_start|>assistant\n");
+        }
+    } else if name.contains("phi-3") {
+        // Phi-3 uses ChatML format
+        for msg in messages {
+            let content = extract_text_content(&msg.content);
+            prompt.push_str(&format!("<|im_start|>{}\n{}<|im_end|>\n", msg.role, content));
+        }
+        prompt.push_str("<|im_start|>assistant\n");
+    } else if name.contains("mistral") || name.contains("mixtral") {
+        // Mistral models use ChatML
+        for msg in messages {
+            let content = extract_text_content(&msg.content);
+            prompt.push_str(&format!("<|im_start|>{}\n{}<|im_end|>\n", msg.role, content));
+        }
+        prompt.push_str("<|im_start|>assistant\n");
+    } else if name.contains("chatml") {
+        // Explicit ChatML format
+        for msg in messages {
             let content = extract_text_content(&msg.content);
             prompt.push_str(&format!("<|im_start|>{}\n{}<|im_end|>\n", msg.role, content));
         }
         prompt.push_str("<|im_start|>assistant\n");
     } else {
-         // Default to ChatML as a robust default for modern models
-         for msg in messages {
+        // Default to ChatML as a robust default for modern models
+        for msg in messages {
             let content = extract_text_content(&msg.content);
             prompt.push_str(&format!("<|im_start|>{}\n{}<|im_end|>\n", msg.role, content));
         }
         prompt.push_str("<|im_start|>assistant\n");
     }
+    
+    // Add debug info for template selection
+    eprintln!("Applied template for model '{}': {} turns", model_name, messages.len());
+    eprintln!("Prompt starts with: {}", &prompt[..prompt.len().min(100)]);
+    
     prompt
 }
 

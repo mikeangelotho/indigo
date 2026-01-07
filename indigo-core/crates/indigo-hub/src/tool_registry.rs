@@ -289,6 +289,7 @@ impl Default for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indigo_common::CliConfig;
 
     #[test]
     fn test_register_tool() {

@@ -23,7 +23,7 @@ use indigo_common::{
 use prost::Message;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::{AppState, convert_common_tool_to_protobuf};
+use crate::{convert_common_tool_to_protobuf, AppState};
 
 #[derive(Deserialize, Debug)]
 pub struct OpenAIChatRequest {
@@ -167,7 +167,7 @@ pub async fn list_openai_models(State(state): State<AppState>) -> Json<OpenAIMod
                     if ext == "gguf" {
                         // let s = path.to_string_lossy().replace("\\", "/");
                         // let clean = s.trim_start_matches("./");
-                         let filename = path.file_name().unwrap_or_default().to_string_lossy();
+                        let filename = path.file_name().unwrap_or_default().to_string_lossy();
                         models.push(crate::prettify_model_name(&filename));
                     }
                 }
@@ -247,44 +247,72 @@ impl ToolParser {
         }
         self.buffer.push_str(token);
 
-        // 1. First check for MCP JSON format: {"function_name": "...", "arguments_json": "..."}
+        // Try multiple parsing strategies for streaming tokens
+        let (text, tool_call) = Self::try_extract_tool_call(&self.buffer);
+
+        // 1. Check if we might have a complete JSON object
         let trimmed = self.buffer.trim();
-        if trimmed.starts_with("{") && trimmed.ends_with("}") {
-            if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                if let Some(fname) = json_value.get("function_name").and_then(|v| v.as_str()) {
-                    let args = if let Some(args_obj) = json_value.get("arguments") {
-                        if args_obj.is_string() {
-                            args_obj.as_str().unwrap_or("{}").to_string()
-                        } else {
-                            args_obj.to_string()
-                        }
-                    } else {
-                        json_value
-                            .get("arguments_json")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("{}")
-                            .to_string()
-                    };
-                    
-                    let tool_call = ToolCall {
-                        index: 0,
-                        id: format!("call_{}", uuid::Uuid::new_v4().simple()),
-                        r#type: "function".to_string(),
-                        function: FunctionCall { 
-                            name: fname.to_string(), 
-                            arguments: args,
-                        },
-                    };
-                    
+        if trimmed.starts_with("{") && (trimmed.ends_with("}") || self.buffer.len() > 200) {
+            // Try to extract valid JSON from buffer
+            if let Some(tc) = tool_call {
+                self.buffer.clear();
+                return (text, Some(tc));
+            } else {
+                // Extract text before potential JSON
+                if let Some(txt) = text {
                     self.buffer.clear();
-                    return (None, Some(tool_call));
+                    return (Some(txt), None);
+                }
+            }
+        }
+
+        // 2. Check for natural language intent when buffer is substantial
+        if self.buffer.len() > 50 && !self.buffer.contains("{") {
+            if let Some(nl_tool) = Self::try_natural_language_extraction(&self.buffer) {
+                eprintln!(
+                    "TOOL_PARSER: Natural language tool detected: {}",
+                    nl_tool.function.name
+                );
+                self.buffer.clear();
+                return (None, Some(nl_tool));
+            }
+        }
+
+        (None, None)
+    }
+
+    /// Try to extract tool calls from a buffer that might contain mixed text and JSON
+    fn try_extract_tool_call(buffer: &str) -> (Option<String>, Option<ToolCall>) {
+        use regex::Regex;
+
+        // Look for JSON-like patterns
+        let re = Regex::new(r"(?s)\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}").unwrap();
+
+        if let Some(mat) = re.find(buffer) {
+            let json_str = mat.as_str();
+
+            // Try to parse the extracted JSON
+            if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(json_str) {
+                if let Some(tool_call) = Self::try_parse_tool_formats(&json_value) {
+                    eprintln!(
+                        "TOOL_PARSER: Tool call detected: {} via format detection",
+                        tool_call.function.name
+                    );
+                    // Extract text before the JSON as content
+                    let prefix = &buffer[..mat.start()];
+                    let content = if !prefix.trim().is_empty() {
+                        Some(prefix.trim().to_string())
+                    } else {
+                        None
+                    };
+                    return (content, Some(tool_call));
                 }
             }
         }
 
         (None, None)
     }
-    
+
     pub fn flush(&mut self) -> Option<String> {
         if self.buffer.is_empty() {
             None
@@ -297,52 +325,242 @@ impl ToolParser {
 
     pub fn parse_static(content: &str) -> (String, Option<Vec<ToolCall>>, String) {
         use regex::Regex;
-        // 1. Fuzzy JSON Extraction using Regex
-        // Finds the first block that looks like a JSON object: { ... }
-        // (?s) enables dot to match newlines
-        let re = Regex::new(r"(?s)\{.*\}").unwrap();
-        
-        if let Some(mat) = re.find(content) {
+
+        // Try multiple parsing strategies in order of preference
+
+        // 1. Try to find any JSON-like objects in the text
+        let re = Regex::new(r"(?s)\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}").unwrap();
+        let mut tool_calls = Vec::new();
+        let last_end = 0;
+        let mut final_content = content.to_string();
+
+        for mat in re.find_iter(content) {
             let json_str = mat.as_str();
-            
+
             // Try to parse the extracted block as JSON
             if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(json_str) {
-                // Check if it looks like a tool call (has function_name)
-                if let Some(fname) = json_value.get("function_name").and_then(|v| v.as_str()) {
-                     let args = if let Some(args_obj) = json_value.get("arguments") {
-                        if args_obj.is_string() {
-                            args_obj.as_str().unwrap_or("{}").to_string()
-                        } else {
-                            args_obj.to_string()
-                        }
-                    } else {
-                        json_value
-                            .get("arguments_json")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("{}")
-                            .to_string()
-                    };
-                    
-                    let tool_call = ToolCall {
-                        index: 0,
-                        id: format!("call_{}", uuid::Uuid::new_v4().simple()),
-                        r#type: "function".to_string(),
-                        function: FunctionCall { 
-                            name: fname.to_string(), 
-                            arguments: args 
-                        },
-                    };
-
-                    // Capture text BEFORE the JSON block as content
-                    let prefix = &content[..mat.start()];
-                    let final_content = prefix.trim().to_string();
-                    
-                    return (final_content, Some(vec![tool_call]), "tool_calls".to_string());
+                // Try different tool call formats
+                if let Some(tool_call) = Self::try_parse_tool_formats(&json_value) {
+                    tool_calls.push(tool_call);
+                    // Remove the tool call from the content
+                    if mat.start() >= last_end {
+                        final_content = format!(
+                            "{}{}",
+                            &content[..mat.start()].trim(),
+                            &content[mat.end()..].trim()
+                        );
+                    }
                 }
             }
         }
-        
+
+        if !tool_calls.is_empty() {
+            return (
+                final_content.trim().to_string(),
+                Some(tool_calls),
+                "tool_calls".to_string(),
+            );
+        }
+
+        // 2. Try natural language extraction (e.g., "I need to read the file test.txt")
+        if let Some(nl_tool) = Self::try_natural_language_extraction(content) {
+            return (String::new(), Some(vec![nl_tool]), "tool_calls".to_string());
+        }
+
         (content.to_string(), None, "stop".to_string())
+    }
+
+    /// Try to parse tool calls in different formats
+    fn try_parse_tool_formats(json_value: &serde_json::Value) -> Option<ToolCall> {
+        // Format 1: Indigo format {"function_name": "...", "arguments": {...}}
+        if let Some(fname) = json_value.get("function_name").and_then(|v| v.as_str()) {
+            let args = Self::extract_arguments_from_json(json_value);
+            return Some(ToolCall {
+                index: 0,
+                id: format!("call_{}", uuid::Uuid::new_v4().simple()),
+                r#type: "function".to_string(),
+                function: FunctionCall {
+                    name: fname.to_string(),
+                    arguments: args,
+                },
+            });
+        }
+
+        // Format 2: OpenAI format {"name": "...", "arguments": {...}}
+        if let Some(name) = json_value.get("name").and_then(|v| v.as_str()) {
+            let args = Self::extract_arguments_from_json(json_value);
+            return Some(ToolCall {
+                index: 0,
+                id: format!("call_{}", uuid::Uuid::new_v4().simple()),
+                r#type: "function".to_string(),
+                function: FunctionCall {
+                    name: name.to_string(),
+                    arguments: args,
+                },
+            });
+        }
+
+        // Format 3: Anthropic format {"name": "...", "input": {...}}
+        if let Some(name) = json_value.get("name").and_then(|v| v.as_str()) {
+            if let Some(input) = json_value.get("input") {
+                return Some(ToolCall {
+                    index: 0,
+                    id: format!("call_{}", uuid::Uuid::new_v4().simple()),
+                    r#type: "function".to_string(),
+                    function: FunctionCall {
+                        name: name.to_string(),
+                        arguments: input.to_string(),
+                    },
+                });
+            }
+        }
+
+        None
+    }
+
+    /// Extract arguments from various JSON field names
+    fn extract_arguments_from_json(json_value: &serde_json::Value) -> String {
+        if let Some(args_obj) = json_value.get("arguments") {
+            if args_obj.is_string() {
+                args_obj.as_str().unwrap_or("{}").to_string()
+            } else {
+                args_obj.to_string()
+            }
+        } else if let Some(args_obj) = json_value.get("arguments_json") {
+            args_obj.as_str().unwrap_or("{}").to_string()
+        } else {
+            "{}".to_string()
+        }
+    }
+
+    /// Try to extract tool calls from natural language
+    fn try_natural_language_extraction(content: &str) -> Option<ToolCall> {
+        let content_lower = content.to_lowercase();
+
+        // Common patterns for different tools
+        if let Some((_tool_name, args)) = Self::extract_read_file_intent(&content_lower) {
+            return Some(Self::create_tool_call("read_file", args));
+        }
+
+        if let Some((_tool_name, args)) = Self::extract_write_file_intent(&content_lower) {
+            return Some(Self::create_tool_call("write_file", args));
+        }
+
+        if let Some((_tool_name, args)) = Self::extract_shell_intent(&content_lower) {
+            return Some(Self::create_tool_call("run_shell", args));
+        }
+
+        if let Some((_tool_name, args)) = Self::extract_list_files_intent(&content_lower) {
+            return Some(Self::create_tool_call("list_files", args));
+        }
+
+        None
+    }
+
+    /// Extract read file intent from natural language
+    fn extract_read_file_intent(content: &str) -> Option<(String, serde_json::Value)> {
+        let patterns = [
+            "read\\s+(?:the\\s+)?file\\s+[\\\"]?([^\\s\\\"']+)[\\\"]?",
+            "open\\s+[\\\"]?([^\\s\\\"']+)[\\\"]?",
+            "show\\s+(?:me\\s+)?(?:the\\s+)?content\\s+of\\s+[\\\"]?([^\\s\\\"']+)[\\\"]?",
+            "what'?s?\\s+in\\s+[\\\"]?([^\\s\\\"']+)[\\\"]?",
+        ];
+
+        for pattern in patterns {
+            if let Ok(re) = regex::Regex::new(pattern) {
+                if let Some(caps) = re.captures(content) {
+                    if let Some(path) = caps.get(1) {
+                        return Some((
+                            "read_file".to_string(),
+                            serde_json::json!({"path": path.as_str()}),
+                        ));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract write file intent from natural language  
+    fn extract_write_file_intent(content: &str) -> Option<(String, serde_json::Value)> {
+        // This is more complex and would require content extraction
+        // For now, just detect intent without the content
+        let patterns = [
+            "write\\s+(?:to\\s+)?(?:the\\s+)?file\\s+[\\\"]?([^\\s\\\"']+)[\\\"]?",
+            "create\\s+(?:a\\s+)?file\\s+[\\\"]?([^\\s\\\"']+)[\\\"]?",
+            "save\\s+(?:to\\s+)?[\\\"]?([^\\s\\\"']+)[\\\"]?",
+        ];
+
+        for pattern in patterns {
+            if let Ok(re) = regex::Regex::new(pattern) {
+                if let Some(caps) = re.captures(content) {
+                    if let Some(path) = caps.get(1) {
+                        return Some((
+                            "write_file".to_string(),
+                            serde_json::json!({"path": path.as_str(), "content": ""}),
+                        ));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract shell command intent from natural language
+    fn extract_shell_intent(content: &str) -> Option<(String, serde_json::Value)> {
+        let patterns = [
+            "run\\s+[\\\"]?([^\\n\\\"]+)[\\\"]?",
+            "execute\\s+[\\\"]?([^\\n\\\"]+)[\\\"]?",
+            "shell\\s+[\\\"]?([^\\n\\\"]+)[\\\"]?",
+            "command\\s+[\\\"]?([^\\n\\\"]+)[\\\"]?",
+        ];
+
+        for pattern in patterns {
+            if let Ok(re) = regex::Regex::new(pattern) {
+                if let Some(caps) = re.captures(content) {
+                    if let Some(cmd) = caps.get(1) {
+                        return Some((
+                            "run_shell".to_string(),
+                            serde_json::json!({"command": cmd.as_str()}),
+                        ));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract list files intent from natural language
+    fn extract_list_files_intent(content: &str) -> Option<(String, serde_json::Value)> {
+        let patterns = [
+            "list\\s+(?:the\\s+)?files\\s+(?:in\\s+)?[\\\"]?([^\\s\\\"]*)[\\\"]?",
+            "ls\\s+[\\\"]?([^\\s\\\"]*)[\\\"]?",
+            "dir\\s+[\\\"]?([^\\s\\\"]*)[\\\"]?",
+            "what\\s+files?\\s+(?:are\\s+)?(?:in\\s+)?[\\\"]?([^\\s\\\"]*)[\\\"]?",
+        ];
+
+        for pattern in patterns {
+            if let Ok(re) = regex::Regex::new(pattern) {
+                if let Some(caps) = re.captures(content) {
+                    let path = caps.get(1).map(|m| m.as_str()).unwrap_or(".");
+                    return Some(("list_files".to_string(), serde_json::json!({"path": path})));
+                }
+            }
+        }
+        None
+    }
+
+    /// Create a tool call from name and arguments
+    fn create_tool_call(name: &str, args: serde_json::Value) -> ToolCall {
+        ToolCall {
+            index: 0,
+            id: format!("call_{}", uuid::Uuid::new_v4().simple()),
+            r#type: "function".to_string(),
+            function: FunctionCall {
+                name: name.to_string(),
+                arguments: args.to_string(),
+            },
+        }
     }
 }
 
@@ -400,7 +618,7 @@ pub async fn proxy_chat_completions(
                 }
             }
         }
-        
+
         let tool_calls = if let Some(tc) = m.tool_calls {
             Some(serde_json::to_value(tc).unwrap_or(serde_json::Value::Null))
         } else {
@@ -415,7 +633,7 @@ pub async fn proxy_chat_completions(
         });
     }
 
-let prompt_payload = serde_json::to_string(&indigo_messages).unwrap_or_default();
+    let prompt_payload = serde_json::to_string(&indigo_messages).unwrap_or_default();
     let stream_req = req.stream.unwrap_or(false);
     let model_name = state.model_name.clone();
 
@@ -425,15 +643,23 @@ let prompt_payload = serde_json::to_string(&indigo_messages).unwrap_or_default()
         Err(e) => {
             return (
                 axum::http::StatusCode::BAD_GATEWAY,
-                Json(OpenAIErrorResponse::new(format!("Failed to connect to proxy target: {}", e), Some("connection_error".into()))),
-            ).into_response();
+                Json(OpenAIErrorResponse::new(
+                    format!("Failed to connect to proxy target: {}", e),
+                    Some("connection_error".into()),
+                )),
+            )
+                .into_response();
         }
     };
 
     // Get tools to include in request
     let tools = {
         let registry = state.tool_registry.read().unwrap();
-        registry.list_tools().into_iter().map(convert_common_tool_to_protobuf).collect::<Vec<_>>()
+        registry
+            .list_tools()
+            .into_iter()
+            .map(convert_common_tool_to_protobuf)
+            .collect::<Vec<_>>()
     };
 
     let grpc_req = GrpcInferenceRequest {
@@ -447,8 +673,8 @@ let prompt_payload = serde_json::to_string(&indigo_messages).unwrap_or_default()
     };
 
     if stream_req {
-        let stream: Pin<Box<dyn Stream<Item = Result<Event, axum::Error>> + Send>> =
-            Box::pin(async_stream::try_stream! {
+        let stream: Pin<Box<dyn Stream<Item = Result<Event, axum::Error>> + Send>> = Box::pin(
+            async_stream::try_stream! {
                 match client.run_inference(Request::new(grpc_req)).await {
                     Ok(resp) => {
                         let mut grpc_stream = resp.into_inner();
@@ -489,7 +715,7 @@ let prompt_payload = serde_json::to_string(&indigo_messages).unwrap_or_default()
 
                             if !item.token.is_empty() {
                                 let (text, tool) = parser.push(&item.token);
-                                
+
                                 if let Some(t) = text {
                                     yield Event::default().json_data(OpenAIStreamResponse {
                                         id: id.clone(),
@@ -503,7 +729,7 @@ let prompt_payload = serde_json::to_string(&indigo_messages).unwrap_or_default()
                                         }],
                                     }).map_err(axum::Error::new)?;
                                 }
-                                
+
                                 if let Some(mut tc) = tool {
                                     tc.index = tool_index;
                                     tool_index += 1;
@@ -528,7 +754,8 @@ let prompt_payload = serde_json::to_string(&indigo_messages).unwrap_or_default()
                     }
                 }
                 yield Event::default().data("[DONE]");
-            });
+            },
+        );
         Sse::new(stream)
             .keep_alive(axum::response::sse::KeepAlive::default())
             .into_response()
@@ -544,7 +771,8 @@ let prompt_payload = serde_json::to_string(&indigo_messages).unwrap_or_default()
                     full_content.push_str(&item.token);
                 }
 
-                let (final_content, tool_calls, finish_reason) = ToolParser::parse_static(&full_content);
+                let (final_content, tool_calls, finish_reason) =
+                    ToolParser::parse_static(&full_content);
 
                 let response = OpenAIResponse {
                     id,
@@ -555,7 +783,11 @@ let prompt_payload = serde_json::to_string(&indigo_messages).unwrap_or_default()
                         index: 0,
                         message: OpenAIMessage {
                             role: "assistant".to_string(),
-                            content: if final_content.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(final_content) },
+                            content: if final_content.is_empty() {
+                                serde_json::Value::Null
+                            } else {
+                                serde_json::Value::String(final_content)
+                            },
                             tool_calls,
                             tool_call_id: None,
                         },
@@ -571,8 +803,12 @@ let prompt_payload = serde_json::to_string(&indigo_messages).unwrap_or_default()
             }
             Err(e) => (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(OpenAIErrorResponse::new(format!("Inference failed: {}", e), Some("inference_error".into()))),
-            ).into_response(),
+                Json(OpenAIErrorResponse::new(
+                    format!("Inference failed: {}", e),
+                    Some("inference_error".into()),
+                )),
+            )
+                .into_response(),
         }
     }
 }
@@ -588,16 +824,25 @@ pub async fn chat_completions(
     // Agent / Tool Logic
     let mut resolved_model = req.model.clone();
     let mut system_prompt_override = None;
-    
+
     // Check if model matches an Agent ID
     {
         let agents = state.agents.read().unwrap();
         if let Some(agent) = agents.get(&req.model) {
-            println!("OpenAI Request routed to Agent: {}", agent.name);
+            eprintln!(
+                "CHAT_COMPLETIONS: OpenAI Request routed to Agent: {} (model: {})",
+                agent.name, agent.model
+            );
             resolved_model = agent.model.clone();
             system_prompt_override = Some(agent.system_prompt.clone());
         }
     }
+
+    eprintln!(
+        "CHAT_COMPLETIONS: Processing request for model: {}, tools: {:?}",
+        resolved_model,
+        req.tools.is_some()
+    );
 
     // Inject System Instruction for Tools
     let mut should_inject_tools = true;
@@ -612,12 +857,12 @@ pub async fn chat_completions(
             }
         }
         Some(serde_json::Value::Object(obj)) => {
-             // Specific tool choice, e.g. {"type": "function", "function": {"name": "..."}}
-             if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
-                 if t == "function" {
-                     force_tool = true;
-                 }
-             }
+            // Specific tool choice, e.g. {"type": "function", "function": {"name": "..."}}
+            if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
+                if t == "function" {
+                    force_tool = true;
+                }
+            }
         }
         None => {
             // Default is "auto", which means tools are available but not forced
@@ -625,22 +870,77 @@ pub async fn chat_completions(
         _ => {}
     }
 
+    /// Get model-specific tool calling instructions
+    fn get_model_specific_tool_instructions(
+        model_name: &str,
+        tools_json: &str,
+        force_tool: bool,
+    ) -> String {
+        let name_lower = model_name.to_lowercase();
+
+        let base_instructions = format!(
+            "\n\nYou have access to the following tools:\n{}",
+            tools_json
+        );
+
+        let force_instruction = if force_tool {
+            "\nYou MUST call at least one tool in your response."
+        } else {
+            ""
+        };
+
+        if name_lower.contains("claude") || name_lower.contains("anthropic") {
+            // Claude format - prefers <tool> format or JSON
+            format!(
+            "\n\nWhen using a tool, wrap your response in <tool> tags like this:\n\
+            <tool>\n{{ \"name\": \"tool_name\", \"input\": {{ \"parameter\": \"value\" }} }}\n</tool>\n\
+            Or you can use the OpenAI format directly.\n\
+            {}{}",
+            base_instructions,
+            force_instruction
+        )
+        } else if name_lower.contains("gpt-4") || name_lower.contains("openai") {
+            // GPT-4 format - standard OpenAI function calling
+            format!(
+            "\n\nTo use a tool, output a JSON object with the function name and arguments.\
+            \nExample: {{ \"name\": \"read_file\", \"arguments\": {{ \"path\": \"file.txt\" }} }}\n\
+            \nAlternative format: {{ \"function_name\": \"read_file\", \"arguments\": {{ \"path\": \"file.txt\" }} }}{}{}",
+            base_instructions,
+            force_instruction
+        )
+        } else if name_lower.contains("llama") || name_lower.contains("mistral") {
+            // Open source models - more explicit instructions needed
+            format!(
+            "\n\nYou have access to tools. When you need to use one, output ONLY a JSON object:\n\
+            {{ \"function_name\": \"tool_name\", \"arguments\": {{ \"parameter\": \"value\" }} }}\n\
+            \nDo not include any explanatory text before or after the JSON.\n\
+            \nIMPORTANT: Output ONLY the JSON for the tool call.{}{}",
+            base_instructions,
+            force_instruction
+        )
+        } else {
+            // Default generic instructions for other models
+            format!(
+            "{}\n\nTo use a tool, output a JSON object with \"function_name\" and \"arguments\" keys.\n\
+            Example: {{ \"function_name\": \"read_file\", \"arguments\": {{ \"path\": \"README.md\" }} }}\n\
+            Alternative format: {{ \"name\": \"read_file\", \"arguments\": {{ \"path\": \"README.md\" }} }}{}",
+            base_instructions,
+            force_instruction
+        )
+        }
+    }
+
     if let Some(tools) = &req.tools {
         if should_inject_tools {
             let tools_json = serde_json::to_string(tools).unwrap_or_default();
-            let mut tool_instruction = format!(
-                "\n\nYou have access to the following tools:\n{}\n\nTo use a tool, you must output a JSON object with the \"function_name\" and \"arguments\" keys.\nExample: {{ \"function_name\": \"read_file\", \"arguments\": {{ \"path\": \"README.md\" }} }}",
-                tools_json
-            );
+            let tool_instruction =
+                get_model_specific_tool_instructions(&resolved_model, &tools_json, force_tool);
 
-            if force_tool {
-                tool_instruction.push_str("\nYou MUST call a tool in your response.");
-            }
-            
             if let Some(sp) = &mut system_prompt_override {
                 sp.push_str(&tool_instruction);
             } else {
-                 system_prompt_override = Some(format!("You are a helpful assistant.{}", tool_instruction));
+                system_prompt_override =
+                    Some(format!("You are a helpful assistant.{}", tool_instruction));
             }
         }
     }
@@ -660,7 +960,7 @@ pub async fn chat_completions(
                 "\nYou have access to the following tools:\n{}\n\nTo use a tool, you MUST use this exact syntax:\n[run tool_name arguments]\n\nExamples:\n[run list_files {{\"path\": \".\"}}]\n[run read_file {{\"path\": \"README.md\"}}]\n[run write_file {{\"path\": \"test.txt\", \"content\": \"Hello world\"}}]\n[run run_shell {{\"command\": \"ls -la\"}}]\n\nCRITICAL: Always use [run tool_name {{...}}] format. Never output raw commands.",
                 tools_json
             );
-            
+
             if let Some(sp) = &mut system_prompt_override {
                 sp.push_str(&tool_prompt);
             } else {
@@ -716,7 +1016,7 @@ pub async fn chat_completions(
         // Some clients send it as a separate field in the message object
         // but our OpenAIMessage struct needs to reflect that.
         // For now, we try to extract it from the raw JSON if present.
-        
+
         let tool_calls = if let Some(tc) = m.tool_calls {
             Some(serde_json::to_value(tc).unwrap_or(serde_json::Value::Null))
         } else {
@@ -758,16 +1058,24 @@ pub async fn chat_completions(
         None => {
             return (
                 axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                Json(OpenAIErrorResponse::new("No available nodes found", Some("no_nodes".into()))),
-            ).into_response();
+                Json(OpenAIErrorResponse::new(
+                    "No available nodes found",
+                    Some("no_nodes".into()),
+                )),
+            )
+                .into_response();
         }
     };
 
-// 2. Prepare Request
+    // 2. Prepare Request
     // Get tools to include in request
     let tools = {
         let registry = state.tool_registry.read().unwrap();
-        registry.list_tools().into_iter().map(convert_common_tool_to_protobuf).collect::<Vec<_>>()
+        registry
+            .list_tools()
+            .into_iter()
+            .map(convert_common_tool_to_protobuf)
+            .collect::<Vec<_>>()
     };
 
     let grpc_req = GrpcInferenceRequest {
@@ -794,8 +1102,12 @@ pub async fn chat_completions(
             {
                 return (
                     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(OpenAIErrorResponse::new("Sidecar IO Error", Some("sidecar_io_error".into()))),
-                ).into_response();
+                    Json(OpenAIErrorResponse::new(
+                        "Sidecar IO Error",
+                        Some("sidecar_io_error".into()),
+                    )),
+                )
+                    .into_response();
             }
 
             if stream_req {
@@ -820,19 +1132,25 @@ pub async fn chat_completions(
 
                     if let Ok(resp) = GrpcInferenceResponse::decode(std::io::Cursor::new(msg_buf)) {
                         if resp.status == 1 {
-                             // Flush parser
-                             if let Some(s) = parser.flush() {
-                                let event = Event::default().json_data(OpenAIStreamResponse {
-                                    id: id_clone.clone(),
-                                    object: "chat.completion.chunk".to_string(),
-                                    created,
-                                    model: model_clone.clone(),
-                                    choices: vec![StreamChoice {
-                                        index: 0,
-                                        delta: Delta { content: Some(s), role: None, tool_calls: None },
-                                        finish_reason: None,
-                                    }],
-}).map_err(axum::Error::new);
+                            // Flush parser
+                            if let Some(s) = parser.flush() {
+                                let event = Event::default()
+                                    .json_data(OpenAIStreamResponse {
+                                        id: id_clone.clone(),
+                                        object: "chat.completion.chunk".to_string(),
+                                        created,
+                                        model: model_clone.clone(),
+                                        choices: vec![StreamChoice {
+                                            index: 0,
+                                            delta: Delta {
+                                                content: Some(s),
+                                                role: None,
+                                                tool_calls: None,
+                                            },
+                                            finish_reason: None,
+                                        }],
+                                    })
+                                    .map_err(axum::Error::new);
                                 let _ = tx.send(event);
                             }
 
@@ -849,7 +1167,11 @@ pub async fn chat_completions(
                                             role: None,
                                             tool_calls: None,
                                         },
-                                        finish_reason: Some(if tool_emitted { "tool_calls".to_string() } else { "stop".to_string() }),
+                                        finish_reason: Some(if tool_emitted {
+                                            "tool_calls".to_string()
+                                        } else {
+                                            "stop".to_string()
+                                        }),
                                     }],
                                 })
                                 .map_err(axum::Error::new);
@@ -858,7 +1180,7 @@ pub async fn chat_completions(
                         }
                         if !resp.token.is_empty() {
                             let (text, tool) = parser.push(&resp.token);
-                            
+
                             if let Some(t) = text {
                                 let event = Event::default()
                                     .json_data(OpenAIStreamResponse {
@@ -879,7 +1201,7 @@ pub async fn chat_completions(
                                     .map_err(axum::Error::new);
                                 let _ = tx.send(event);
                             }
-                            
+
                             if let Some(tc) = tool {
                                 tool_emitted = true;
                                 let tc_clone = tc.clone(); // Clone for later use
@@ -901,26 +1223,63 @@ pub async fn chat_completions(
                                     })
                                     .map_err(axum::Error::new);
                                 let _ = tx.send(event);
-                                
+
                                 // Execute the tool using tool registry and executor
+                                eprintln!(
+                                    "TOOL_EXECUTOR: Executing tool: {}",
+                                    tc_clone.function.name
+                                );
                                 let tool_output = {
                                     let tool_def = {
                                         let registry = state.tool_registry.read().unwrap();
-                                        registry.list_tools().into_iter().find(|t| t.name == tc_clone.function.name).cloned()
+                                        let available_tools: Vec<_> = registry
+                                            .list_tools()
+                                            .into_iter()
+                                            .map(|t| t.name.clone())
+                                            .collect();
+                                        eprintln!(
+                                            "TOOL_EXECUTOR: Available tools: {:?}",
+                                            available_tools
+                                        );
+                                        registry
+                                            .list_tools()
+                                            .into_iter()
+                                            .find(|t| t.name == tc_clone.function.name)
+                                            .cloned()
                                     };
-                                    
+
                                     if let Some(td) = tool_def {
+                                        eprintln!(
+                                            "TOOL_EXECUTOR: Found tool definition: {} (type: {:?})",
+                                            td.name, td.config
+                                        );
                                         let mut executor = state.tool_executor.write().await;
-                                        let args: serde_json::Value = serde_json::from_str(&tc_clone.function.arguments).unwrap_or_default();
+                                        let args: serde_json::Value =
+                                            serde_json::from_str(&tc_clone.function.arguments)
+                                                .unwrap_or_default();
+                                        eprintln!("TOOL_EXECUTOR: Tool arguments: {}", args);
                                         match executor.execute_tool(&td, &args).await {
-                                            Ok(res) => res,
-                                            Err(e) => format!("Error executing tool: {}", e),
+                                            Ok(res) => {
+                                                eprintln!("TOOL_EXECUTOR: Tool executed successfully, output length: {}", res.len());
+                                                res
+                                            }
+                                            Err(e) => {
+                                                eprintln!(
+                                                    "TOOL_EXECUTOR: Tool execution failed: {}",
+                                                    e
+                                                );
+                                                format!("Error executing tool: {}", e)
+                                            }
                                         }
                                     } else {
+                                        eprintln!(
+                                            "TOOL_EXECUTOR: Tool '{}' not found in registry",
+                                            tc_clone.function.name
+                                        );
                                         format!("Tool '{}' not found", tc_clone.function.name)
                                     }
                                 };
-                                
+
                                 // Stream tool execution result
                                 let result_event = Event::default()
                                     .json_data(OpenAIStreamResponse {
@@ -931,7 +1290,10 @@ pub async fn chat_completions(
                                         choices: vec![StreamChoice {
                                             index: 0,
                                             delta: Delta {
-                                                content: Some(format!("\n\n[Agent Output]: {}\n", tool_output)),
+                                                content: Some(format!(
+                                                    "\n\n[Agent Output]: {}\n",
+                                                    tool_output
+                                                )),
                                                 role: None,
                                                 tool_calls: None,
                                             },
@@ -970,7 +1332,8 @@ pub async fn chat_completions(
                     }
                 }
 
-                let (final_content, tool_calls, finish_reason) = ToolParser::parse_static(&full_content);
+                let (final_content, tool_calls, finish_reason) =
+                    ToolParser::parse_static(&full_content);
 
                 let response = OpenAIResponse {
                     id,
@@ -981,7 +1344,11 @@ pub async fn chat_completions(
                         index: 0,
                         message: OpenAIMessage {
                             role: "assistant".to_string(),
-                            content: if final_content.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(final_content) },
+                            content: if final_content.is_empty() {
+                                serde_json::Value::Null
+                            } else {
+                                serde_json::Value::String(final_content)
+                            },
                             tool_calls,
                             tool_call_id: None,
                         },
@@ -996,10 +1363,14 @@ pub async fn chat_completions(
                 return Json(response).into_response();
             }
         } else {
-             return (
+            return (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(OpenAIErrorResponse::new("Sidecar not running but requested", Some("sidecar_error".into()))),
-            ).into_response();
+                Json(OpenAIErrorResponse::new(
+                    "Sidecar not running but requested",
+                    Some("sidecar_error".into()),
+                )),
+            )
+                .into_response();
         }
     }
 
@@ -1007,16 +1378,20 @@ pub async fn chat_completions(
     let mut client = match InferenceServiceClient::connect(node_address).await {
         Ok(c) => c,
         Err(e) => {
-             return (
+            return (
                 axum::http::StatusCode::BAD_GATEWAY,
-                Json(OpenAIErrorResponse::new(format!("Failed to connect to node: {}", e), Some("connection_error".into()))),
-            ).into_response();
+                Json(OpenAIErrorResponse::new(
+                    format!("Failed to connect to node: {}", e),
+                    Some("connection_error".into()),
+                )),
+            )
+                .into_response();
         }
     };
 
     if stream_req {
-        let stream: Pin<Box<dyn Stream<Item = Result<Event, axum::Error>> + Send>> =
-            Box::pin(async_stream::try_stream! {
+        let stream: Pin<Box<dyn Stream<Item = Result<Event, axum::Error>> + Send>> = Box::pin(
+            async_stream::try_stream! {
                 match client.run_inference(Request::new(grpc_req)).await {
                     Ok(resp) => {
                         let mut grpc_stream = resp.into_inner();
@@ -1057,7 +1432,7 @@ pub async fn chat_completions(
 
                             if !item.token.is_empty() {
                                 let (text, tool) = parser.push(&item.token);
-                                
+
                                 if let Some(t) = text {
                                     yield Event::default().json_data(OpenAIStreamResponse {
                                         id: id.clone(),
@@ -1071,7 +1446,7 @@ pub async fn chat_completions(
                                         }],
                                     }).map_err(axum::Error::new)?;
                                 }
-                                
+
                                 if let Some(mut tc) = tool {
                                     tc.index = tool_index;
                                     tool_index += 1;
@@ -1097,7 +1472,8 @@ pub async fn chat_completions(
                 }
 
                 yield Event::default().data("[DONE]");
-            });
+            },
+        );
 
         Sse::new(stream)
             .keep_alive(axum::response::sse::KeepAlive::default())
@@ -1115,7 +1491,8 @@ pub async fn chat_completions(
                     full_content.push_str(&item.token);
                 }
 
-                let (final_content, tool_calls, finish_reason) = ToolParser::parse_static(&full_content);
+                let (final_content, tool_calls, finish_reason) =
+                    ToolParser::parse_static(&full_content);
 
                 let response = OpenAIResponse {
                     id,
@@ -1126,7 +1503,11 @@ pub async fn chat_completions(
                         index: 0,
                         message: OpenAIMessage {
                             role: "assistant".to_string(),
-                            content: if final_content.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(final_content) },
+                            content: if final_content.is_empty() {
+                                serde_json::Value::Null
+                            } else {
+                                serde_json::Value::String(final_content)
+                            },
                             tool_calls,
                             tool_call_id: None,
                         },
@@ -1142,8 +1523,12 @@ pub async fn chat_completions(
             }
             Err(e) => (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(OpenAIErrorResponse::new(format!("Inference failed: {}", e), Some("inference_error".into()))),
-            ).into_response(),
+                Json(OpenAIErrorResponse::new(
+                    format!("Inference failed: {}", e),
+                    Some("inference_error".into()),
+                )),
+            )
+                .into_response(),
         }
     }
 }
