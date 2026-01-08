@@ -183,13 +183,24 @@ export default function AgentDetail() {
       "..."
     );
     
-    ws.onopen = () => {
+    ws.onopen = async () => {
       const history = conv.messages
         .filter((m) => m.id !== assistantMsgId)
         .map((m) => {
             // The content is now already in the correct format for the API
             return { role: m.role, content: m.content };
         });
+
+      // Fetch available tools from the hub (web chat context)
+      let availableTools = [];
+      try {
+        const toolsResponse = await fetch(`${settingsStore.activeHub}/v1/tools?context=web`);
+        if (toolsResponse.ok) {
+          availableTools = await toolsResponse.json();
+        }
+      } catch (error) {
+        console.error("Failed to fetch tools:", error);
+      }
 
       ws?.send(
         JSON.stringify({
@@ -198,6 +209,8 @@ export default function AgentDetail() {
           max_tokens: 2048,
           temperature: 0.7,
           agent_id: params.id,
+          context: "web",
+          tools: availableTools,
         })
       );
     };

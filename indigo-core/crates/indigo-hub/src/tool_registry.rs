@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use indigo_common::{
-    NativeConfig, ToolConfig, ToolDefinition, ToolType,
+    HttpConfig, NativeConfig, ToolConfig, ToolDefinition, ToolContext, ToolType,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +51,7 @@ impl ToolRegistry {
             }),
             permissions: vec!["file:read".to_string()],
             node_compatible: true,
+            context: ToolContext::CliInterface,
             created_at: now.clone(),
             updated_at: now.clone(),
         };
@@ -86,6 +87,7 @@ impl ToolRegistry {
             }),
             permissions: vec!["file:read".to_string()],
             node_compatible: true,
+            context: ToolContext::CliInterface,
             created_at: now.clone(),
             updated_at: now.clone(),
         };
@@ -115,6 +117,7 @@ impl ToolRegistry {
             }),
             permissions: vec!["file:write".to_string()],
             node_compatible: true,
+            context: ToolContext::CliInterface,
             created_at: now.clone(),
             updated_at: now.clone(),
         };
@@ -151,6 +154,71 @@ impl ToolRegistry {
             }),
             permissions: vec!["shell:execute".to_string()],
             node_compatible: true,
+            context: ToolContext::CliInterface,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        };
+
+        // web_search tool
+        let web_search = ToolDefinition {
+            id: "builtin_web_search".to_string(),
+            name: "web_search".to_string(),
+            description: "Search the web for information".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query"
+                    },
+                    "num_results": {
+                        "type": "integer",
+                        "description": "Number of results to return (default: 10)",
+                        "default": 10,
+                        "minimum": 1,
+                        "maximum": 20
+                    }
+                },
+                "required": ["query"]
+            }),
+            tool_type: ToolType::Http,
+            config: ToolConfig::Http(HttpConfig {
+                endpoint: "https://api.exa.ai/search".to_string(),
+                method: "POST".to_string(),
+                headers: std::collections::HashMap::new(),
+                auth_type: "none".to_string(),
+                auth_token: String::new(),
+                verify_ssl: true,
+            }),
+            permissions: vec!["web:search".to_string()],
+            node_compatible: true,
+            context: ToolContext::WebChat,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        };
+
+        // analyze_project tool
+        let analyze_project = ToolDefinition {
+            id: "builtin_analyze_project".to_string(),
+            name: "analyze_project".to_string(),
+            description: "Analyze project structure and provide insights".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "focus": {
+                        "type": "string",
+                        "description": "Focus area for analysis (e.g., 'architecture', 'dependencies', 'security')",
+                        "enum": ["architecture", "dependencies", "security", "performance"]
+                    }
+                }
+            }),
+            tool_type: ToolType::Native,
+            config: ToolConfig::Native(NativeConfig {
+                name: "analyze_project".to_string(),
+            }),
+            permissions: vec!["project:read".to_string()],
+            node_compatible: true,
+            context: ToolContext::Both,
             created_at: now.clone(),
             updated_at: now.clone(),
         };
@@ -159,6 +227,8 @@ impl ToolRegistry {
         self.tools.insert(read_file.id.clone(), read_file);
         self.tools.insert(write_file.id.clone(), write_file);
         self.tools.insert(run_shell.id.clone(), run_shell);
+        self.tools.insert(web_search.id.clone(), web_search);
+        self.tools.insert(analyze_project.id.clone(), analyze_project);
     }
 
     pub fn register_tool(&mut self, tool: ToolDefinition) -> Result<()> {

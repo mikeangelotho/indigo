@@ -21,6 +21,8 @@ pub struct InferenceRequest {
     pub max_tokens: usize,
     pub temperature: f32,
     pub agent_id: Option<String>,
+    pub tools: Option<Vec<ToolDefinition>>,
+    pub context: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +73,7 @@ pub struct ToolDefinition {
     pub config: ToolConfig,
     pub permissions: Vec<String>,
     pub node_compatible: bool,
+    pub context: ToolContext,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -82,6 +85,13 @@ pub enum ToolType {
     Http,
     Mcp,
     Cli,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ToolContext {
+    WebChat,
+    CliInterface,
+    Both,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

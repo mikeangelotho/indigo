@@ -685,6 +685,7 @@ fn convert_protobuf_tool_to_common(
         config,
         permissions: proto_tool.permissions,
         node_compatible: proto_tool.node_compatible,
+        context: indigo_common::ToolContext::Both, // Default to Both for converted tools
         created_at: proto_tool.created_at,
         updated_at: proto_tool.updated_at,
     })
@@ -1893,7 +1894,10 @@ async fn list_tools_legacy(State(state): State<AppState>) -> Json<serde_json::Va
 }
 
 // New tool management HTTP endpoints
-async fn list_tools_http(State(state): State<AppState>) -> Json<Vec<ToolDefinition>> {
+async fn list_tools_http(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<Vec<ToolDefinition>> {
     let registry = match state.tool_registry.read() {
         Ok(guard) => guard,
         Err(e) => {
@@ -1901,8 +1905,27 @@ async fn list_tools_http(State(state): State<AppState>) -> Json<Vec<ToolDefiniti
             return Json(Vec::new());
         }
     };
-    let tools = registry.list_tools();
-    Json(tools.into_iter().cloned().collect())
+    
+    let all_tools = registry.list_tools();
+    
+    // Filter by context if specified
+    let filtered_tools = if let Some(context) = params.get("context") {
+        match context.as_str() {
+            "web" => all_tools.into_iter()
+                .filter(|t| matches!(t.context, indigo_common::ToolContext::WebChat | indigo_common::ToolContext::Both))
+                .cloned()
+                .collect(),
+            "cli" => all_tools.into_iter()
+                .filter(|t| matches!(t.context, indigo_common::ToolContext::CliInterface | indigo_common::ToolContext::Both))
+                .cloned()
+                .collect(),
+            _ => all_tools.into_iter().cloned().collect(),
+        }
+    } else {
+        all_tools.into_iter().cloned().collect()
+    };
+    
+    Json(filtered_tools)
 }
 
 async fn register_tool_http(
@@ -2120,28 +2143,47 @@ if let Some(agent_id) = &req.agent_id {
 if let Some((name, prompt, _model)) = agent_info {
                         println!("Using agent: {}", name);
 
-                        let final_prompt = prompt;
-                        /*
-                        final_prompt.push_str("\n\nYou have access to the following tools:\n");
-                        final_prompt.push_str(
-                            "- list_files: List files in a directory. Args: {\"path\": \".\"}\n",
-                        );
-                        final_prompt.push_str(
-                            "- read_file: Read file content. Args: {\"path\": \"file.txt\"}\n",
-                        );
-                        final_prompt.push_str("- write_file: Write content to a file. Args: {\"path\": \"file.txt\", \"content\": \"text\"}\n");
-                        final_prompt.push_str(
-                            "- run_shell: Execute shell command. Args: {\"command\": \"ls\"}\n\n",
-                        );
-                        final_prompt.push_str("To use a tool, you MUST use this exact format:\n");
-                        final_prompt.push_str("[run tool_name arguments]\n\n");
-                        final_prompt.push_str("Examples:\n");
-                        final_prompt.push_str("[run list_files {\"path\": \".\"}]\n");
-                        final_prompt.push_str("[run read_file {\"path\": \"README.md\"}]\n");
-                        final_prompt.push_str("[run write_file {\"path\": \"test.txt\", \"content\": \"Hello world\"}]\n");
-                        final_prompt.push_str("[run run_shell {\"command\": \"ls -la\"}]\n\n");
-                        final_prompt.push_str("IMPORTANT: Always use [run tool_name {{...}}] format. Do not output raw commands.");
-                        */
+                        let mut final_prompt = prompt;
+
+                        // Add tool instructions if tools are available
+                        let tools_for_instructions = if let Some(ref tools) = req.tools {
+                            tools.clone()
+                        } else {
+                            // Filter tools based on request context
+                            let registry = state_clone.tool_registry.read().unwrap();
+                            let all_tools = registry.list_tools();
+                            
+                            match req.context.as_deref().unwrap_or("cli") {
+                                "web" => all_tools
+                                    .into_iter()
+                                    .filter(|t| matches!(t.context, indigo_common::ToolContext::WebChat | indigo_common::ToolContext::Both))
+                                    .cloned()
+                                    .collect(),
+                                "cli" => all_tools
+                                    .into_iter()
+                                    .filter(|t| matches!(t.context, indigo_common::ToolContext::CliInterface | indigo_common::ToolContext::Both))
+                                    .cloned()
+                                    .collect(),
+                                _ => all_tools.into_iter().cloned().collect(),
+                            }
+                        };
+
+                        if !tools_for_instructions.is_empty() {
+                            final_prompt.push_str("\n\nYou have access to the following tools:\n");
+                            for tool in &tools_for_instructions {
+                                final_prompt.push_str(&format!("- {}: {}\n", tool.name, tool.description));
+                            }
+                            
+                            final_prompt.push_str("\nTo use a tool, you MUST use this exact format:\n");
+                            final_prompt.push_str("{\"function_name\": \"tool_name\", \"arguments\": {...}}\n\n");
+                            final_prompt.push_str("Examples:\n");
+                            final_prompt.push_str("{\"function_name\": \"list_files\", \"arguments\": {\"path\": \".\"}}\n");
+                            final_prompt.push_str("{\"function_name\": \"read_file\", \"arguments\": {\"path\": \"README.md\"}}\n");
+                            final_prompt.push_str("{\"function_name\": \"write_file\", \"arguments\": {\"path\": \"test.txt\", \"content\": \"Hello world\"}}\n");
+                            final_prompt.push_str("{\"function_name\": \"run_shell\", \"arguments\": {\"command\": \"ls -la\"}}\n\n");
+                            final_prompt.push_str("IMPORTANT: Always use the JSON format for tool calls. Do not output raw commands.\n");
+                            final_prompt.push_str("The tool call should be a standalone JSON object on its own line.");
+                        }
 
                         let system_msg = ChatMessage {
                             role: "system".to_string(),
@@ -2190,6 +2232,12 @@ if let Some((name, prompt, _model)) = agent_info {
                     if let Some(handle) = sidecar_guard.as_mut() {
                         println!("Routing to Multimodal Sidecar...");
 
+                        // Get tools to include in request
+                        let tools = {
+                            let registry = state_clone.tool_registry.read().unwrap();
+                            registry.list_tools().into_iter().map(convert_common_tool_to_protobuf).collect::<Vec<_>>()
+                        };
+
                         let grpc_req = GrpcInferenceRequest {
                             prompt: prompt_payload,
                             max_tokens: req.max_tokens as u32,
@@ -2197,7 +2245,7 @@ if let Some((name, prompt, _model)) = agent_info {
                             image_data: image_data.unwrap(),
                             stop: vec![],
                             model_name,
-                            tools: vec![],
+                            tools: tools,
                         };
 
                         let req_bytes = grpc_req.encode_to_vec();
@@ -2573,15 +2621,14 @@ println!("Forwarding request to node at: {}", node_address);
                                          format!("Error: Tool '{}' not found", tc.function.name)
                                     };
 
-                                    if let Err(_) = send_json(
-                                        &sender_clone,
-                                        &InferenceResponse {
-                                            token: format!("\n\n[Agent Output]: {}\n", output),
-                                            status: MessageStatus::Streaming,
-                                        },
-                                    )
-                                    .await
-                                    {
+                                    let tool_resp = InferenceResponse {
+                                        token: output,
+                                        status: MessageStatus::ToolCall(ToolCallInfo {
+                                            function_name: tc.function.name.clone(),
+                                            arguments_json: tc.function.arguments.clone(),
+                                        }),
+                                    };
+                                    if let Err(_) = send_json(&sender_clone, &tool_resp).await {
                                         break;
                                     }
                                 }

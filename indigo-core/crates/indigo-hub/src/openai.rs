@@ -48,6 +48,7 @@ pub struct OpenAIMessage {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ToolCall {
+    #[serde(default)]
     pub index: u32,
     pub id: String,
     pub r#type: String,
@@ -71,6 +72,7 @@ pub struct OpenAIStreamResponse {
 
 #[derive(Serialize, Debug)]
 pub struct StreamChoice {
+    #[serde(default)]
     pub index: u32,
     pub delta: Delta,
     pub finish_reason: Option<String>,
@@ -96,6 +98,7 @@ pub struct OpenAIResponse {
 
 #[derive(Serialize, Debug)]
 pub struct Choice {
+    #[serde(default)]
     pub index: u32,
     pub message: OpenAIMessage,
     pub finish_reason: String,
@@ -267,6 +270,7 @@ impl ToolParser {
         }
 
         // 2. Check for natural language intent when buffer is substantial
+        /* Disabled: Aggressive NL parsing causes false positives
         if self.buffer.len() > 50 && !self.buffer.contains("{") {
             if let Some(nl_tool) = Self::try_natural_language_extraction(&self.buffer) {
                 eprintln!(
@@ -277,6 +281,7 @@ impl ToolParser {
                 return (None, Some(nl_tool));
             }
         }
+        */
 
         (None, None)
     }
@@ -291,7 +296,7 @@ impl ToolParser {
         if let Some(mat) = re.find(buffer) {
             let json_str = mat.as_str();
 
-            // Try to parse the extracted JSON
+            // Try to parse the extracted JSON directly
             if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(json_str) {
                 if let Some(tool_call) = Self::try_parse_tool_formats(&json_value) {
                     eprintln!(
@@ -307,6 +312,32 @@ impl ToolParser {
                     };
                     return (content, Some(tool_call));
                 }
+            }
+
+            // Fallback: Try to fix unquoted keys (common with some models)
+            // e.g. {function_name: glob, ...} -> {"function_name": "glob", ...}
+            // This is a naive regex fix but catches common cases
+            let re_keys = Regex::new(r"(\s*)(\w+)(\s*):").unwrap();
+            let fixed_json = re_keys.replace_all(json_str, r#"$1"$2"$3:"#);
+            
+            // Also need to quote string values if they aren't quoted? 
+            // That's much harder to do safely with regex. 
+            // Let's rely on the prompt instructions for values, but keys are the main issue.
+
+            if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&fixed_json) {
+                 if let Some(tool_call) = Self::try_parse_tool_formats(&json_value) {
+                    eprintln!(
+                        "TOOL_PARSER: Tool call detected (relaxed JSON): {} via format detection",
+                        tool_call.function.name
+                    );
+                     let prefix = &buffer[..mat.start()];
+                    let content = if !prefix.trim().is_empty() {
+                        Some(prefix.trim().to_string())
+                    } else {
+                        None
+                    };
+                    return (content, Some(tool_call));
+                 }
             }
         }
 
@@ -363,9 +394,11 @@ impl ToolParser {
         }
 
         // 2. Try natural language extraction (e.g., "I need to read the file test.txt")
+        /* Disabled: Aggressive NL parsing causes false positives
         if let Some(nl_tool) = Self::try_natural_language_extraction(content) {
             return (String::new(), Some(vec![nl_tool]), "tool_calls".to_string());
         }
+        */
 
         (content.to_string(), None, "stop".to_string())
     }
@@ -578,6 +611,7 @@ pub async fn proxy_chat_completions(
     let mut image_data: Option<Vec<u8>> = None;
     let mut indigo_messages: Vec<ChatMessage> = Vec::new();
 
+    /* Removed: Redundant simple tool instruction injection
     // Inject System Instruction for Tools
     if req.tools.is_some() {
         indigo_messages.push(ChatMessage {
@@ -587,6 +621,7 @@ pub async fn proxy_chat_completions(
             tool_call_id: None,
         });
     }
+    */
 
     for m in req.messages {
         let mut text_content = String::new();
@@ -914,7 +949,9 @@ pub async fn chat_completions(
             "\n\nYou have access to tools. When you need to use one, output ONLY a JSON object:\n\
             {{ \"function_name\": \"tool_name\", \"arguments\": {{ \"parameter\": \"value\" }} }}\n\
             \nDo not include any explanatory text before or after the JSON.\n\
-            \nIMPORTANT: Output ONLY the JSON for the tool call.{}{}",
+            \nIMPORTANT: Output ONLY the JSON for the tool call. ENSURE all keys and strings are enclosed in double quotes.\n\
+            Correct: {{ \"function_name\": \"list_files\", ... }}\n\
+            Incorrect: {{ function_name: list_files, ... }}{}{}",
             base_instructions,
             force_instruction
         )
@@ -930,11 +967,29 @@ pub async fn chat_completions(
         }
     }
 
-    if let Some(tools) = &req.tools {
+    // Logic to determine which tools to show
+    let (tools_json_str, tools_count) = if let Some(tools) = &req.tools {
+        (serde_json::to_string(tools).unwrap_or_default(), tools.len())
+    } else {
+        // Fallback to Registry Tools
+        let registry = state.tool_registry.read().unwrap();
+        let tools: Vec<serde_json::Value> = registry.list_tools().into_iter().map(|t| {
+             serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.parameters
+                }
+            })
+        }).collect();
+        (serde_json::to_string(&tools).unwrap_or_default(), tools.len())
+    };
+
+    if tools_count > 0 {
         if should_inject_tools {
-            let tools_json = serde_json::to_string(tools).unwrap_or_default();
             let tool_instruction =
-                get_model_specific_tool_instructions(&resolved_model, &tools_json, force_tool);
+                get_model_specific_tool_instructions(&resolved_model, &tools_json_str, force_tool);
 
             if let Some(sp) = &mut system_prompt_override {
                 sp.push_str(&tool_instruction);
@@ -1451,6 +1506,8 @@ pub async fn chat_completions(
                                     tc.index = tool_index;
                                     tool_index += 1;
                                     tool_emitted = true;
+                                    let tc_clone = tc.clone();
+
                                     yield Event::default().json_data(OpenAIStreamResponse {
                                         id: id.clone(),
                                         object: "chat.completion.chunk".to_string(),
@@ -1462,6 +1519,57 @@ pub async fn chat_completions(
                                             finish_reason: None,
                                         }],
                                     }).map_err(axum::Error::new)?;
+
+                                    // Execute the tool using tool registry and executor
+                                    eprintln!(
+                                        "TOOL_EXECUTOR (gRPC): Executing tool: {}",
+                                        tc_clone.function.name
+                                    );
+                                    let tool_output = {
+                                        let tool_def = {
+                                            let registry = state.tool_registry.read().unwrap();
+                                            registry
+                                                .list_tools()
+                                                .into_iter()
+                                                .find(|t| t.name == tc_clone.function.name)
+                                                .cloned()
+                                        };
+
+                                        if let Some(td) = tool_def {
+                                            let mut executor = state.tool_executor.write().await;
+                                            let args: serde_json::Value =
+                                                serde_json::from_str(&tc_clone.function.arguments)
+                                                    .unwrap_or_default();
+                                            match executor.execute_tool(&td, &args).await {
+                                                Ok(res) => res,
+                                                Err(e) => format!("Error executing tool: {}", e),
+                                            }
+                                        } else {
+                                            format!("Tool '{}' not found", tc_clone.function.name)
+                                        }
+                                    };
+
+                                    // Stream tool execution result
+                                    yield Event::default()
+                                        .json_data(OpenAIStreamResponse {
+                                            id: id.clone(),
+                                            object: "chat.completion.chunk".to_string(),
+                                            created,
+                                            model: model_name.clone(),
+                                            choices: vec![StreamChoice {
+                                                index: 0,
+                                                delta: Delta {
+                                                    content: Some(format!(
+                                                        "\n\n[Agent Output]: {}\n",
+                                                        tool_output
+                                                    )),
+                                                    role: None,
+                                                    tool_calls: None,
+                                                },
+                                                finish_reason: None,
+                                            }],
+                                        })
+                                        .map_err(axum::Error::new)?;
                                 }
                             }
                         }
