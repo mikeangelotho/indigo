@@ -3,6 +3,7 @@ pub mod inference {
 }
 
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -57,26 +58,30 @@ pub struct AgentConfig {
     pub created_at: u64,
     #[serde(default = "default_status")]
     pub status: String, // "Online", "Offline"
+    pub tool_format: Option<String>, // Tool format override for this agent
 }
 
 fn default_status() -> String {
     "Offline".to_string()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDefinition {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub parameters: serde_json::Value,
-    pub tool_type: ToolType,
-    pub config: ToolConfig,
-    pub permissions: Vec<String>,
-    pub node_compatible: bool,
-    pub context: ToolContext,
-    pub created_at: String,
-    pub updated_at: String,
-}
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ToolDefinition {
+        pub id: String,
+        pub name: String,
+        pub description: String,
+        pub parameters: serde_json::Value,
+        pub tool_type: ToolType,
+        pub config: ToolConfig,
+        pub permissions: Vec<String>,
+        pub node_compatible: bool,
+        pub context: ToolContext,
+        pub created_at: String,
+        pub updated_at: String,
+        /// Tool format this tool uses for compatibility with different AI tools
+        #[serde(skip)]
+        pub format: Option<ToolFormat>,
+    }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ToolType {
@@ -104,10 +109,39 @@ pub enum ToolConfig {
     Native(NativeConfig),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NativeConfig {
-    pub name: String, // e.g., "bash", "read", "glob", "grep"
-}
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    pub enum ToolFormat {
+        /// OpenCode AI format: {"name": "tool_name", "arguments": {...}}
+        OpenCode,
+        /// Indigo format: {"function_name": "tool_name", "arguments": {...}}
+        Indigo,
+        /// Continue.dev/Claude Code format: {"name": "tool_name", "arguments": {...}}
+        Continue,
+        /// Cursor format: {"name": "tool_name", "arguments": {...}}
+        Cursor,
+        /// Auto-detect based on provider/model
+        Auto,
+    }
+
+    impl FromStr for ToolFormat {
+        type Err = String;
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            match s.to_lowercase().as_str() {
+                "opencode" => Ok(ToolFormat::OpenCode),
+                "indigo" => Ok(ToolFormat::Indigo),
+                "continue" => Ok(ToolFormat::Continue),
+                "cursor" => Ok(ToolFormat::Cursor),
+                "auto" => Ok(ToolFormat::Auto),
+                _ => Err(format!("Invalid tool format: {}", s)),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct NativeConfig {
+        pub name: String, // e.g., "bash", "read", "glob", "grep"
+    }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmConfig {

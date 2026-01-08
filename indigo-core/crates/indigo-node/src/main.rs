@@ -13,7 +13,7 @@ use indigo_common::inference::{
     McpToolExecutionResponse, NodeRegistration, NodeToolsRequest, NodeToolsResponse, PingRequest,
     PingResponse, RegistrationResponse, ToolDefinition, ToolExecutionRequest,
     ToolExecutionResponse, ToolListRequest, ToolListResponse, ToolRegistryRequest,
-    ToolRegistryResponse, ToolType, ToolUnregisterRequest, ToolUpdateRequest,
+    ToolRegistryResponse, ToolType, ToolUnregisterRequest, ToolUpdateRequest, ToolConfig, NativeConfig,
 };
 use indigo_common::{ChatMessage, McpJsonResponse, McpPayload, ToolCallInfo};
 use prost::Message;
@@ -542,14 +542,18 @@ impl InferenceService for MyInferenceService {
                 created_at: "".to_string(),
                 updated_at: "".to_string(),
             },
-            ToolDefinition {
-                name: "read".to_string(),
-                description: "Read content from a file".to_string(),
-                parameters_schema: r#"{"type": "object", "properties": {"path": {"type": "string", "description": "File path"}}, "required": ["path"]}"#.to_string(),
-                required: "[\"path\"]".to_string(),
-                id: "read".to_string(),
+        ToolDefinition {
+                name: "grep".to_string(),
+                description: "Search for a regex pattern in files".to_string(),
+                parameters_schema: r#"{"type": "object", "properties": {"pattern": {"type": "string", "description": "Regex pattern"}, "include": {"type": "string", "description": "Glob pattern for files to include"}}, "required": ["pattern"]}"#.to_string(),
+                required: "[\"pattern\"]".to_string(),
+                id: "grep".to_string(),
                 r#type: ToolType::Native as i32,
-                config: None,
+                config: Some(ToolConfig {
+                    config: Some(indigo_common::inference::tool_config::Config::Native(NativeConfig {
+                        name: "grep".to_string(),
+                    })),
+                }),
                 permissions: vec![],
                 node_compatible: true,
                 created_at: "".to_string(),

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use indigo_common::{HttpConfig, NativeConfig, ToolConfig, ToolContext, ToolDefinition, ToolType};
+use indigo_common::{HttpConfig, NativeConfig, ToolConfig, ToolContext, ToolDefinition, ToolFormat, ToolType};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolRegistry {
@@ -25,8 +25,28 @@ impl ToolRegistry {
     fn register_builtin_tools(&mut self) {
         let now = Utc::now().to_rfc3339();
 
+        // Set default tool format from environment variable or config
+        let default_format = std::env::var("INDIGO_TOOL_FORMAT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .or_else(|| {
+                // Check global config for default format
+                if let Ok(config_content) = std::fs::read_to_string("/etc/indigo/config.toml") {
+                    config_content.lines()
+                        .find(|line| line.trim().starts_with("default_tool_format"))
+                        .and_then(|line| line.split_once('=').map(|(_, format)| format.trim()))
+                        .and_then(|format_str| format_str.parse().ok())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(ToolFormat::Indigo);
+
+        // Set format for all tools that support OpenCode format
+        let opencode_format = default_format.clone();
+
         // list_files tool
-        let list_files = ToolDefinition {
+        let mut list_files = ToolDefinition {
             id: "builtin_list_files".to_string(),
             name: "list_files".to_string(),
             description: "List files and directories in a specified path".to_string(),
@@ -49,13 +69,17 @@ impl ToolRegistry {
             }),
             permissions: vec!["file:read".to_string()],
             node_compatible: true,
-            context: ToolContext::CliInterface,
+            context: ToolContext::Both,
             created_at: now.clone(),
             updated_at: now.clone(),
+            format: None,
         };
 
+        // Set format based on default configuration
+        list_files.format = Some(opencode_format.clone());
+
         // read_file tool
-        let read_file = ToolDefinition {
+        let mut read_file = ToolDefinition {
             id: "builtin_read_file".to_string(),
             name: "read_file".to_string(),
             description: "Read contents of a file".to_string(),
@@ -85,13 +109,17 @@ impl ToolRegistry {
             }),
             permissions: vec!["file:read".to_string()],
             node_compatible: true,
-            context: ToolContext::CliInterface,
+            context: ToolContext::Both,
             created_at: now.clone(),
             updated_at: now.clone(),
+            format: None,
         };
 
+        // Set format based on default configuration
+        read_file.format = Some(opencode_format.clone());
+
         // write_file tool
-        let write_file = ToolDefinition {
+        let mut write_file = ToolDefinition {
             id: "builtin_write_file".to_string(),
             name: "write_file".to_string(),
             description: "Write content to a file (creates or overwrites)".to_string(),
@@ -115,13 +143,17 @@ impl ToolRegistry {
             }),
             permissions: vec!["file:write".to_string()],
             node_compatible: true,
-            context: ToolContext::CliInterface,
+            context: ToolContext::Both,
             created_at: now.clone(),
             updated_at: now.clone(),
+            format: None,
         };
 
+        // Set format based on default configuration
+        write_file.format = Some(opencode_format.clone());
+
         // run_shell tool
-        let run_shell = ToolDefinition {
+        let mut run_shell = ToolDefinition {
             id: "builtin_run_shell".to_string(),
             name: "run_shell".to_string(),
             description: "Execute shell commands".to_string(),
@@ -152,16 +184,60 @@ impl ToolRegistry {
             }),
             permissions: vec!["shell:execute".to_string()],
             node_compatible: true,
+            context: ToolContext::Both,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+            format: None,
+        };
+
+        // Set format based on default configuration
+        run_shell.format = Some(opencode_format.clone());
+
+        // run_shell tool (CLI interface version)
+        let mut run_shell_cli = ToolDefinition {
+            id: "builtin_run_shell_cli".to_string(),
+            name: "run_shell".to_string(),
+            description: "Execute shell commands (CLI interface)".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Shell command to execute"
+                    },
+                    "working_dir": {
+                        "type": "string",
+                        "description": "Working directory for command execution (optional)"
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Command timeout in seconds (default: 30)",
+                        "default": 30,
+                        "minimum": 1,
+                        "maximum": 300
+                    }
+                },
+                "required": ["command"]
+            }),
+            tool_type: ToolType::Native,
+            config: ToolConfig::Native(NativeConfig {
+                name: "bash".to_string(),
+            }),
+            permissions: vec!["shell:execute".to_string()],
+            node_compatible: true,
             context: ToolContext::CliInterface,
             created_at: now.clone(),
             updated_at: now.clone(),
+            format: None,
         };
+        
+        run_shell_cli.format = Some(opencode_format.clone());
 
         // web_search tool
-        let web_search = ToolDefinition {
+        let mut web_search = ToolDefinition {
             id: "builtin_web_search".to_string(),
             name: "web_search".to_string(),
-            description: "Search the web for information".to_string(),
+            description: "Search web for information".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -190,13 +266,17 @@ impl ToolRegistry {
             }),
             permissions: vec!["web:search".to_string()],
             node_compatible: true,
-            context: ToolContext::WebChat,
+            context: ToolContext::Both,
             created_at: now.clone(),
             updated_at: now.clone(),
+            format: None,
         };
 
+        // Set format based on default configuration
+        web_search.format = Some(opencode_format.clone());
+
         // url_shortener tool
-        let url_shortener = ToolDefinition {
+        let mut url_shortener = ToolDefinition {
             id: "builtin_url_shortener".to_string(),
             name: "url_shortener".to_string(),
             description: "Create short URLs from long URLs using a URL shortening service"
@@ -231,13 +311,17 @@ impl ToolRegistry {
             }),
             permissions: vec!["web:create".to_string()],
             node_compatible: true,
-            context: ToolContext::WebChat,
+            context: ToolContext::Both,
             created_at: now.clone(),
             updated_at: now.clone(),
+            format: None,
         };
 
+        // Set format based on default configuration
+        url_shortener.format = Some(opencode_format.clone());
+
         // analyze_project tool
-        let analyze_project = ToolDefinition {
+        let mut analyze_project = ToolDefinition {
             id: "builtin_analyze_project".to_string(),
             name: "analyze_project".to_string(),
             description: "Analyze project structure and provide insights".to_string(),
@@ -246,7 +330,7 @@ impl ToolRegistry {
                 "properties": {
                     "focus": {
                         "type": "string",
-                        "description": "Focus area for analysis (e.g., 'architecture', 'dependencies', 'security')",
+                        "description": "Focus area for analysis (e.g., 'architecture', 'dependencies', 'security', 'performance')",
                         "enum": ["architecture", "dependencies", "security", "performance"]
                     }
                 }
@@ -260,12 +344,17 @@ impl ToolRegistry {
             context: ToolContext::Both,
             created_at: now.clone(),
             updated_at: now.clone(),
+            format: None,
         };
+
+        // Set format based on default configuration
+        analyze_project.format = Some(opencode_format.clone());
 
         self.tools.insert(list_files.id.clone(), list_files);
         self.tools.insert(read_file.id.clone(), read_file);
         self.tools.insert(write_file.id.clone(), write_file);
         self.tools.insert(run_shell.id.clone(), run_shell);
+        self.tools.insert(run_shell_cli.id.clone(), run_shell_cli);
         self.tools.insert(web_search.id.clone(), web_search);
         self.tools.insert(url_shortener.id.clone(), url_shortener);
         self.tools
@@ -424,6 +513,7 @@ mod tests {
             node_compatible: true,
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
+            format: None,
         };
 
         assert!(registry.register_tool(tool.clone()).is_ok());
@@ -452,6 +542,7 @@ mod tests {
             node_compatible: true,
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
+            format: None,
         };
 
         assert!(registry.register_tool(invalid_tool).is_err());

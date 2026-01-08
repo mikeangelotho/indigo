@@ -689,6 +689,7 @@ fn convert_protobuf_tool_to_common(
         context: indigo_common::ToolContext::Both, // Default to Both for converted tools
         created_at: proto_tool.created_at,
         updated_at: proto_tool.updated_at,
+        format: None,
     })
 }
 
@@ -1706,6 +1707,7 @@ async fn create_agent(
         } else {
             "Offline".into()
         },
+        tool_format: None,
     };
 
     // Store the agent

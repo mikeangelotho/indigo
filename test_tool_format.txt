@@ -1,0 +1,16 @@
+# Test Tool Format Conversion
+
+This file tests the tool format conversion functionality.
+
+## Indigo Format (Default)
+```json
+{"function_name": "read_file", "arguments": {"path": "test.txt"}}
+```
+
+## OpenCode Format 
+```json
+{"name": "read_file", "arguments": {"path": "test.txt"}}
+```
+
+## Conversion Test
+Your system should automatically convert between formats based on the configuration.

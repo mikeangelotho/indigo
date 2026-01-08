@@ -3,12 +3,12 @@ use std::time::Duration;
 use anyhow::{Result, anyhow, Context};
 use tokio::process::Command as TokioCommand;
 use tokio::time::timeout;
-use serde_json::Value;
+use serde_json::{Value, json};
 use reqwest::Client;
 use glob::glob;
 use regex::Regex;
 
-use indigo_common::{ToolDefinition, ToolConfig, WasmConfig, HttpConfig, McpConfig, CliConfig, NativeConfig};
+use indigo_common::{CliConfig, HttpConfig, McpConfig, NativeConfig, ToolConfig, ToolDefinition, ToolFormat, WasmConfig};
 
 pub struct ToolExecutor {
     http_client: Client,
@@ -35,27 +35,45 @@ impl ToolExecutor {
             ToolConfig::Http(config) => self.execute_http_tool(config, arguments).await,
             ToolConfig::Wasm(config) => self.execute_wasm_tool(config, arguments).await,
             ToolConfig::Mcp(config) => self.execute_mcp_tool(config, &tool.name, arguments).await,
-            ToolConfig::Native(config) => self.execute_native_tool(config, arguments).await,
+            ToolConfig::Native(config) => self.execute_native_tool(config, tool, arguments).await,
         }
     }
 
-    async fn execute_native_tool(&self, config: &NativeConfig, arguments: &Value) -> Result<String> {
+    async fn execute_native_tool(&self, config: &NativeConfig, tool: &ToolDefinition, arguments: &Value) -> Result<String> {
         println!("TOOL_EXECUTOR: Executing native tool '{}' with args: {}", config.name, arguments);
+        
+        // Check if this tool should use OpenCode format
+        let use_opencode_format = tool.format
+            .as_ref()
+            .map(|f| matches!(f, ToolFormat::OpenCode))
+            .unwrap_or(false);
+
         match config.name.as_str() {
             "bash" | "run_shell" => {
-                 let cmd = arguments.get("command").or_else(|| arguments.get("cmd")).or_else(|| arguments.get("input")).and_then(|v| v.as_str())
+                let cmd = arguments.get("command").or_else(|| arguments.get("cmd")).or_else(|| arguments.get("input")).and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow!("Missing 'command' argument"))?;
                  
-                 #[cfg(target_os = "windows")]
-                 let output = TokioCommand::new("cmd").arg("/C").arg(cmd).output().await
-                     .map_err(|e| anyhow!("Failed to execute process: {}", e))?;
-                 #[cfg(not(target_os = "windows"))]
-                 let output = TokioCommand::new("bash").arg("-c").arg(cmd).output().await
-                     .map_err(|e| anyhow!("Failed to execute process: {}", e))?;
-
-                 let stdout = String::from_utf8_lossy(&output.stdout);
-                 let stderr = String::from_utf8_lossy(&output.stderr);
-                 Ok(format!("Output:\n{}\nErrors:\n{}", stdout, stderr))
+                #[cfg(target_os = "windows")]
+                let output = TokioCommand::new("cmd").arg("/C").arg(cmd).output().await
+                      .map_err(|e| anyhow!("Failed to execute process: {}", e))?;
+                #[cfg(not(target_os = "windows"))]
+                let output = TokioCommand::new("bash").arg("-c").arg(cmd).output().await
+                      .map_err(|e| anyhow!("Failed to execute process: {}", e))?;
+                 
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                
+                let result = format!("Output:\n{}\nErrors:\n{}", stdout, stderr);
+                
+                // Return in appropriate format based on tool format configuration
+                if use_opencode_format {
+                    Ok(json!({
+                        "name": config.name,
+                        "arguments": arguments
+                    }).to_string())
+                } else {
+                    Ok(result)
+                }
             }
             "read" | "read_file" => {
                 let path = arguments.get("path").and_then(|v| v.as_str())

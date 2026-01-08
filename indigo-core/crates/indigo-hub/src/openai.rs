@@ -17,9 +17,7 @@ use tokio_stream::StreamExt;
 use tonic::Request;
 
 use indigo_common::{
-    inference::inference_service_client::InferenceServiceClient,
-    inference::InferenceRequest as GrpcInferenceRequest,
-    inference::InferenceResponse as GrpcInferenceResponse, ChatMessage,
+    ChatMessage, inference::{InferenceRequest as GrpcInferenceRequest, InferenceResponse as GrpcInferenceResponse, inference_service_client::InferenceServiceClient},
 };
 
 use prost::Message;
@@ -396,56 +394,50 @@ impl ToolParser {
             );
         }
 
-        // 2. Try natural language extraction (e.g., "I need to read the file test.txt")
-        /* Disabled: Aggressive NL parsing causes false positives
-        if let Some(nl_tool) = Self::try_natural_language_extraction(content) {
-            return (String::new(), Some(vec![nl_tool]), "tool_calls".to_string());
-        }
-        */
-
         (content.to_string(), None, "stop".to_string())
     }
 
-    /// Try to parse tool calls in different formats
     fn try_parse_tool_formats(json_value: &serde_json::Value) -> Option<ToolCall> {
-        // Format 1: Indigo format {"function_name": "...", "arguments": {...}}
-        if let Some(fname) = json_value.get("function_name").and_then(|v| v.as_str()) {
-            let args = Self::extract_arguments_from_json(json_value);
-            return Some(ToolCall {
-                index: 0,
-                id: format!("call_{}", uuid::Uuid::new_v4().simple()),
-                r#type: "function".to_string(),
-                function: FunctionCall {
-                    name: fname.to_string(),
-                    arguments: args,
-                },
-            });
-        }
+        // Try to parse Indigo format: {"function_name": "tool_name", "arguments": {...}}
+        if let Some(function_name) = json_value.get("function_name") {
+            if let Some(args) = json_value.get("arguments") {
+                // Found complete Indigo format tool call
+                let name = function_name.as_str().map(|s| s.to_string()).unwrap_or_else(|| function_name.to_string());
+                let arguments = if args.is_string() {
+                    args.as_str().unwrap_or("{}").to_string()
+                } else {
+                    args.to_string()
+                };
 
-        // Format 2: OpenAI format {"name": "...", "arguments": {...}}
-        if let Some(name) = json_value.get("name").and_then(|v| v.as_str()) {
-            let args = Self::extract_arguments_from_json(json_value);
-            return Some(ToolCall {
-                index: 0,
-                id: format!("call_{}", uuid::Uuid::new_v4().simple()),
-                r#type: "function".to_string(),
-                function: FunctionCall {
-                    name: name.to_string(),
-                    arguments: args,
-                },
-            });
-        }
-
-        // Format 3: Anthropic format {"name": "...", "input": {...}}
-        if let Some(name) = json_value.get("name").and_then(|v| v.as_str()) {
-            if let Some(input) = json_value.get("input") {
                 return Some(ToolCall {
                     index: 0,
                     id: format!("call_{}", uuid::Uuid::new_v4().simple()),
                     r#type: "function".to_string(),
                     function: FunctionCall {
-                        name: name.to_string(),
-                        arguments: input.to_string(),
+                        name,
+                        arguments,
+                    },
+                });
+            }
+        }
+
+        // Try to parse Anthropic format: {"name": "...", "input": {...}}
+        if let Some(name) = json_value.get("name") {
+            if let Some(input) = json_value.get("input") {
+                let tool_name = name.as_str().map(|s| s.to_string()).unwrap_or_else(|| name.to_string());
+                let arguments = if input.is_string() {
+                    input.as_str().unwrap_or("{}").to_string()
+                } else {
+                    input.to_string()
+                };
+
+                return Some(ToolCall {
+                    index: 0,
+                    id: format!("call_{}", uuid::Uuid::new_v4().simple()),
+                    r#type: "function".to_string(),
+                    function: FunctionCall {
+                        name: tool_name,
+                        arguments,
                     },
                 });
             }
@@ -1083,9 +1075,42 @@ pub async fn chat_completions(
 
         if should_inject {
             let tools_json = serde_json::to_string(tools).unwrap_or_default();
+            
+            // Load format configuration
+            let format_config = match std::fs::read_to_string("/etc/indigo/config.toml") {
+                Ok(config_content) => {
+                    if let Some(format) = config_content.lines()
+                        .find(|line| line.trim().starts_with("default_tool_format"))
+                        .and_then(|line| line.split_once('='))
+                        .map(|(_, format)| format.trim())
+                    {
+                        format.parse().unwrap_or(indigo_common::ToolFormat::Indigo)
+                    } else {
+                        indigo_common::ToolFormat::Indigo
+                    }
+                } else {
+                    indigo_common::ToolFormat::Indigo
+                }
+            } else {
+                indigo_common::ToolFormat::Indigo
+            };
+            
+            // Generate format-specific tool instructions
+            let tool_instructions = match format_config {
+                indigo_common::ToolFormat::Indigo => format!(
+                    "\nYou have access to the following tools:\n{}\n\nTo use a tool, you MUST use this exact syntax:\n[run tool_name arguments]\n\nExamples:\n[run list_files {{\"path\": \".\"}}]\n[run read_file {{\"path\": \"README.md\"}}]\n[run write_file {{\"path\": \"test.txt\", \"content\": \"Hello world\"}}]\n[run run_shell {{\"command\": \"ls -la\"}}]\n\nCRITICAL: Always use [run tool_name {{...}}] format. Never output raw commands."
+                ),
+                indigo_common::ToolFormat::OpenCode => format!(
+                    "\nYou have access to the following tools:\n{}\n\nTo use a tool, you MUST use this exact syntax:\n{{\"name\": \"tool_name\", \"arguments\": {{...}}}}\n\nExamples:\n{{\"name\": \"list_files\", \"arguments\": {{\"path\": \".\"}}}}\n{{\"name\": \"read_file\", \"arguments\": {{\"path\": \"README.md\"}}}}\n{{\"name\": \"write_file\", \"arguments\": {{\"path\": \"test.txt\", \"content\": \"Hello world\"}}}}\n{{\"name\": \"run_shell\", \"arguments\": {{\"command\": \"ls -la\"}}}}\n\nCRITICAL: Always use {{\"name\": \"tool_name\", \"arguments\": {{...}}}} format. Never output raw commands."
+                ),
+                _ => format!( // Default to Indigo format
+                    "\nYou have access to the following tools:\n{}\n\nTo use a tool, you MUST use this exact syntax:\n[run tool_name arguments]\n\nExamples:\n[run list_files {{\"path\": \".\"}}]\n[run read_file {{\"path\": \"README.md\"}}]\n[run write_file {{\"path\": \"test.txt\", \"content\": \"Hello world\"}}]\n[run run_shell {{\"command\": \"ls -la\"}}]\n\nCRITICAL: Always use [run tool_name {{...}}] format. Never output raw commands."
+                ),
+            };
+            
             let tool_prompt = format!(
-                "\nYou have access to the following tools:\n{}\n\nTo use a tool, you MUST use this exact syntax:\n[run tool_name arguments]\n\nExamples:\n[run list_files {{\"path\": \".\"}}]\n[run read_file {{\"path\": \"README.md\"}}]\n[run write_file {{\"path\": \"test.txt\", \"content\": \"Hello world\"}}]\n[run run_shell {{\"command\": \"ls -la\"}}]\n\nCRITICAL: Always use [run tool_name {{...}}] format. Never output raw commands.",
-                tools_json
+                "\n{}{}",
+                tools_json, tool_instructions
             );
 
             if let Some(sp) = &mut system_prompt_override {
@@ -1592,7 +1617,7 @@ pub async fn chat_completions(
                                         }],
                                     }).map_err(axum::Error::new)?;
 
-                                    // Execute the tool using tool registry and executor
+
                                     eprintln!(
                                         "TOOL_EXECUTOR (gRPC): Executing tool: {}",
                                         tc_clone.function.name

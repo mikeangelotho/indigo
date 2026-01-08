@@ -5,6 +5,7 @@
     "system_prompt": "You are a helpful AI assistant.",
     "model": "./models/models--unsloth--Qwen3-VL-2B-Instruct-GGUF/snapshots/8dcb98e52a1d1d02dce9249e5ab15bae8121c666/Qwen3-VL-2B-Instruct-BF16.gguf",
     "created_at": 1767719339,
-    "status": "Online"
+    "status": "Online",
+    "tool_format": null
   }
 }
