@@ -365,6 +365,7 @@ impl InferenceService for HubGrpcService {
             target_address: req.address.clone(),
             model_name: req.model_name.clone(),
             tool_registry: tool_registry_clone,
+            tool_executor: self.state.tool_executor.clone(),
         };
 
         tokio::spawn(async move {

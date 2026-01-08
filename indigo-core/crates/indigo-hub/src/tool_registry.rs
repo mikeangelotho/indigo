@@ -4,9 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use indigo_common::{
-    HttpConfig, NativeConfig, ToolConfig, ToolDefinition, ToolContext, ToolType,
-};
+use indigo_common::{HttpConfig, NativeConfig, ToolConfig, ToolContext, ToolDefinition, ToolType};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolRegistry {
@@ -197,6 +195,47 @@ impl ToolRegistry {
             updated_at: now.clone(),
         };
 
+        // url_shortener tool
+        let url_shortener = ToolDefinition {
+            id: "builtin_url_shortener".to_string(),
+            name: "url_shortener".to_string(),
+            description: "Create short URLs from long URLs using a URL shortening service"
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The long URL to shorten (e.g., 'https://example.com/very/long/path')"
+                    },
+                    "long_url": {
+                        "type": "string",
+                        "description": "Alternative parameter name - the long URL to shorten"
+                    },
+                    "service": {
+                        "type": "string",
+                        "description": "URL shortening service to use",
+                        "enum": ["tinyurl"],
+                        "default": "tinyurl"
+                    }
+                },
+                "required": ["url"],
+                "anyOf": [
+                    {"required": ["url"]},
+                    {"required": ["long_url"]}
+                ]
+            }),
+            tool_type: ToolType::Native,
+            config: ToolConfig::Native(NativeConfig {
+                name: "url_shortener".to_string(),
+            }),
+            permissions: vec!["web:create".to_string()],
+            node_compatible: true,
+            context: ToolContext::WebChat,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        };
+
         // analyze_project tool
         let analyze_project = ToolDefinition {
             id: "builtin_analyze_project".to_string(),
@@ -228,7 +267,9 @@ impl ToolRegistry {
         self.tools.insert(write_file.id.clone(), write_file);
         self.tools.insert(run_shell.id.clone(), run_shell);
         self.tools.insert(web_search.id.clone(), web_search);
-        self.tools.insert(analyze_project.id.clone(), analyze_project);
+        self.tools.insert(url_shortener.id.clone(), url_shortener);
+        self.tools
+            .insert(analyze_project.id.clone(), analyze_project);
     }
 
     pub fn register_tool(&mut self, tool: ToolDefinition) -> Result<()> {
@@ -378,6 +419,7 @@ mod tests {
                 environment: HashMap::new(),
                 timeout: 30,
             }),
+            context: ToolContext::Both,
             permissions: vec![],
             node_compatible: true,
             created_at: Utc::now().to_rfc3339(),
@@ -405,6 +447,7 @@ mod tests {
                 environment: HashMap::new(),
                 timeout: 30,
             }),
+            context: ToolContext::Both,
             permissions: vec![],
             node_compatible: true,
             created_at: Utc::now().to_rfc3339(),

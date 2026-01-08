@@ -10,7 +10,9 @@ use base64::prelude::*;
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::SystemTime;
+use crate::tool_executor::ToolExecutor;
 use tokio_stream::StreamExt;
 use tonic::Request;
 
@@ -231,6 +233,7 @@ pub struct ProxyState {
     pub target_address: String,
     pub model_name: String,
     pub tool_registry: crate::tool_registry::SharedToolRegistry,
+    pub tool_executor: Arc<tokio::sync::RwLock<ToolExecutor>>,
 }
 
 pub struct ToolParser {
@@ -769,6 +772,10 @@ pub async fn proxy_chat_completions(
                                     tc.index = tool_index;
                                     tool_index += 1;
                                     tool_emitted = true;
+                                    
+                                    // Store a copy for execution
+                                    let tc_clone = tc.clone();
+                                    
                                     yield Event::default().json_data(OpenAIStreamResponse {
                                         id: id.clone(),
                                         object: "chat.completion.chunk".to_string(),
@@ -777,6 +784,71 @@ pub async fn proxy_chat_completions(
                                         choices: vec![StreamChoice {
                                             index: 0,
                                             delta: Delta { content: None, role: None, tool_calls: Some(vec![tc]) },
+                                            finish_reason: None,
+                                        }],
+                                    }).map_err(axum::Error::new)?;
+                                    
+                                    // Execute tool and stream result (FIX: Add missing tool execution in proxy)
+                                    eprintln!("PROXY_TOOL_EXECUTOR: Executing tool: {}", tc_clone.function.name);
+                                    
+                                    // Clone necessary data before async block to fix lifetime issues
+                                    let tool_name = tc_clone.function.name.clone();
+                                    let tool_args = tc_clone.function.arguments.clone();
+                                    let tool_executor = state.tool_executor.clone();
+                                    
+                                    // Get tool definition before async block to avoid lifetime issues
+                                    let tool_def = {
+                                        let registry = state.tool_registry.read().unwrap();
+                                        let available_tools: Vec<_> = registry
+                                            .list_tools()
+                                            .into_iter()
+                                            .map(|t| t.name.clone())
+                                            .collect();
+                                        eprintln!("PROXY_TOOL_EXECUTOR: Available tools: {:?}", available_tools);
+                                        
+                                        registry
+                                            .list_tools()
+                                            .into_iter()
+                                            .find(|t| t.name == tool_name)
+                                            .cloned() // Clone the tool definition to avoid borrowing issues
+                                    };
+                                    
+                                    let tool_output = {
+                                        if let Some(td) = tool_def {
+                                            eprintln!("PROXY_TOOL_EXECUTOR: Found tool definition: {} (type: {:?})", td.name, td.config);
+                                            let mut executor = tool_executor.write().await;
+                                            let args: serde_json::Value = 
+                                                serde_json::from_str(&tool_args).unwrap_or_default();
+                                            eprintln!("PROXY_TOOL_EXECUTOR: Tool arguments: {}", args);
+                                            match executor.execute_tool(&td, &args).await {
+                                                Ok(res) => {
+                                                    eprintln!("PROXY_TOOL_EXECUTOR: Tool executed successfully, output length: {}", res.len());
+                                                    res
+                                                },
+                                                Err(e) => {
+                                                    eprintln!("PROXY_TOOL_EXECUTOR: Tool execution failed: {}", e);
+                                                    format!("Error executing tool: {}", e)
+                                                }
+                                            }
+                                        } else {
+                                            eprintln!("PROXY_TOOL_EXECUTOR: Tool '{}' not found in registry", tool_name);
+                                            format!("Tool '{}' not found", tool_name)
+                                        }
+                                    };
+
+                                    // Stream tool execution result
+                                    yield Event::default().json_data(OpenAIStreamResponse {
+                                        id: id.clone(),
+                                        object: "chat.completion.chunk".to_string(),
+                                        created,
+                                        model: model_name.clone(),
+                                        choices: vec![StreamChoice {
+                                            index: 0,
+                                            delta: Delta {
+                                                content: Some(format!("\n\n[Agent Output]: {}\n", tool_output)),
+                                                role: None,
+                                                tool_calls: None,
+                                            },
                                             finish_reason: None,
                                         }],
                                     }).map_err(axum::Error::new)?;

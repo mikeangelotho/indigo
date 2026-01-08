@@ -170,6 +170,41 @@ impl ToolExecutor {
                 
                 Ok(result)
             }
+            "url_shortener" => {
+                let url = arguments.get("url")
+                    .or_else(|| arguments.get("long_url"))
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow!("Missing 'url' or 'long_url' argument"))?;
+                let service = arguments.get("service").and_then(|v| v.as_str()).unwrap_or("tinyurl");
+                
+                println!("TOOL_EXECUTOR: Shortening URL '{}' using service '{}'", url, service);
+                
+                match service {
+                    "tinyurl" => {
+                        // Use TinyURL's public API
+                        let api_url = format!("https://tinyurl.com/api-create.php?url={}", 
+                                           urlencoding::encode(url));
+                        
+                        let response = self.http_client.get(&api_url)
+                            .send().await
+                            .map_err(|e| anyhow!("Failed to call TinyURL API: {}", e))?;
+                            
+                        if !response.status().is_success() {
+                            return Err(anyhow!("TinyURL API failed with status: {}", response.status()));
+                        }
+                        
+                        let short_url = response.text().await
+                            .map_err(|e| anyhow!("Failed to read TinyURL response: {}", e))?;
+                        
+                        if short_url.starts_with("https://tinyurl.com/") {
+                            Ok(format!("✅ Shortened URL: {}", short_url))
+                        } else {
+                            Err(anyhow!("Invalid response from TinyURL: {}", short_url))
+                        }
+                    }
+                    _ => Err(anyhow!("Unsupported URL shortening service: {}", service)),
+                }
+            }
             _ => Err(anyhow!("Unknown native tool: {}", config.name)),
         }
     }
