@@ -1,2 +1,0 @@
-Hello, this is a test file for tool calling!
-It contains some sample text to verify that read_file tool works correctly.

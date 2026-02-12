@@ -1,3 +1,4 @@
 set CMAKE_ARGS=
 set CMAKE_GENERATOR_TOOLSET=
-set CMAKE_CUDA_FLAGS=--allow-unsupported-compiler
+set CMAKE_CUDA_FLAGS=
+set CUDAFE_FLAGS=
