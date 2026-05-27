@@ -22,14 +22,14 @@ const fetchStats = async (hubUrl: string) => {
       fetch(`${hubUrl}/nodes`),
     ]);
     if (!agentsRes.ok || !nodesRes.ok) throw new Error("Failed to fetch stats");
-    
+
     const agents = await agentsRes.json();
     const nodes = await nodesRes.json();
     return {
       agentCount: agents.length,
       nodeCount: nodes.length,
       activeNodes: nodes.filter((n: any) => n.status === "Online").length,
-      totalMemory: nodes.length * 16, // Mock data
+      totalMemory: nodes.length * 16,
       uptime: "99.98%",
     };
   } catch (e) {
@@ -42,23 +42,31 @@ export default function Home() {
   const [stats] = createResource(() => settingsStore.activeHub, fetchStats);
 
   return (
-    <main class="max-w-7xl mx-auto p-6 space-y-10">
-      {/* Welcome Header */}
-      <header class="relative overflow-hidden rounded-2xl bg-linear-to-br from-indigo-900/20 via-zinc-900 to-black border border-zinc-800 p-8 md:p-12 shadow-2xl">
-        <div class="absolute -right-20 -top-20 w-80 h-80 bg-indigo-500/10 rounded-full blur-[100px]"></div>
+    <main class="max-w-7xl mx-auto p-6 space-y-8">
+      {/* Welcome Header — PULSE hero style */}
+      <header class="relative overflow-hidden border border-ng p-8 md:p-12" style="clip-path: var(--ng-clip-card)">
+        {/* Corner accent */}
+        <div class="absolute top-0 right-0 w-24 h-0.5 bg-linear-to-l from-cyan-ng to-transparent"></div>
+        <div class="absolute top-0 right-0 w-0.5 h-24 bg-linear-to-b from-cyan-ng to-transparent"></div>
+        {/* Gradient wash */}
+        <div class="absolute inset-0" style="background: var(--ng-gradient-hero)"></div>
+        {/* Ambient glow */}
+        <div class="absolute -right-20 -top-20 w-80 h-80 rounded-full blur-[100px]" style="background: var(--ng-cyan-glow)"></div>
+        <div class="absolute -left-20 -bottom-20 w-60 h-60 rounded-full blur-[80px]" style="background: var(--ng-magenta-glow)"></div>
+
         <div class="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
           <div>
-            <div class="flex items-center gap-2 text-indigo-400 font-mono text-xs uppercase tracking-[0.2em] mb-3">
-              <ShieldCheck size={14} />
+            <div class="flex items-center gap-2 font-data text-[10px] uppercase tracking-[0.2em] mb-3 text-cyan-ng">
+              <ShieldCheck size={12} />
               Secure Environment Verified
             </div>
-            <h1 class="text-4xl md:text-5xl font-bold tracking-tight text-white mb-4">
+            <h1 class="text-3xl md:text-4xl font-bold tracking-tight text-white mb-3 font-data">
               Welcome back,{" "}
-              <span class="text-transparent bg-clip-text bg-linear-to-r from-indigo-400 to-cyan-400">
+              <span class="text-transparent bg-clip-text bg-linear-to-r from-cyan-ng to-magenta-ng">
                 {authState.user?.name}
               </span>
             </h1>
-            <p class="text-zinc-400 text-lg max-w-xl leading-relaxed">
+            <p class="text-ng-secondary text-base max-w-xl leading-relaxed">
               Your decentralized compute grid is operational. Currently sharding
               inference across{" "}
               <span class="text-white font-semibold">
@@ -70,33 +78,33 @@ export default function Home() {
           <div class="flex gap-3">
             <A
               href="/agents"
-              class="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-3 rounded-xl font-semibold transition-all hover:scale-105 flex items-center gap-2 shadow-lg shadow-indigo-900/20"
+              class="btn-primary flex items-center gap-2"
             >
-              <PlusCircle size={20} />
+              <PlusCircle size={16} />
               Deploy Agent
             </A>
           </div>
         </div>
       </header>
 
-      {/* Stats Grid */}
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+      {/* Stats Grid — PULSE watcher card style */}
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Active Agents"
           value={stats()?.agentCount || 0}
-          icon={<Users class="text-indigo-400" />}
+          icon={<Users class="text-cyan-ng" />}
           trend="+2 this week"
         />
         <StatCard
           title="Compute Nodes"
           value={`${stats()?.activeNodes || 0}/${stats()?.nodeCount || 0}`}
-          icon={<Cpu class="text-cyan-400" />}
+          icon={<Cpu class="text-magenta-ng" />}
           trend="100% Health"
         />
         <StatCard
           title="System Uptime"
           value={stats()?.uptime || "0%"}
-          icon={<Activity class="text-green-400" />}
+          icon={<Activity class="text-online" />}
           trend="Stable"
         />
         <StatCard
@@ -107,48 +115,47 @@ export default function Home() {
         />
       </div>
 
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Quick Actions & Navigation */}
-        <div class="lg:col-span-2 space-y-8">
-          <h2 class="text-xl font-bold text-white flex items-center gap-2">
-            <Zap size={20} class="text-yellow-400" />
+        <div class="lg:col-span-2 space-y-6">
+          <div class="ng-section-header">
+            <Zap size={14} />
             Strategic Operations
-          </h2>
+          </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <ActionCard
               href="/agents"
               title="Agent Swarm"
               desc="Manage specialized personas and fine-tune system directives for autonomous tasks."
-              icon={<Users size={24} />}
-              color="indigo"
+              icon={<Users size={20} />}
+              accent="cyan"
             />
             <ActionCard
               href="/nodes"
               title="Compute Grid"
               desc="Monitor real-time node performance, sharding metrics, and GPU utilization."
-              icon={<Network size={24} />}
-              color="cyan"
+              icon={<Network size={20} />}
+              accent="magenta"
             />
           </div>
 
-          {/* Network Visualization Placeholder */}
-          <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 relative overflow-hidden group">
-            <div class="absolute inset-0 bg-linear-to-br from-indigo-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
-            <div class="flex justify-between items-start mb-8">
+          {/* Network Visualization */}
+          <div class="ng-card p-6 corner-accent">
+            <div class="flex justify-between items-start mb-6">
               <div>
-                <h3 class="text-lg font-bold text-white">Grid Topology</h3>
-                <p class="text-sm text-zinc-500">
+                <h3 class="text-sm font-bold text-white font-data tracking-wider">Grid Topology</h3>
+                <p class="text-xs text-ng-muted mt-1">
                   Geographic distribution of active inference workers.
                 </p>
               </div>
-              <ArrowUpRight class="text-zinc-600 group-hover:text-white transition-colors" />
+              <ArrowUpRight class="text-ng-muted group-hover:text-cyan-ng transition-colors" size={18} />
             </div>
-            <div class="aspect-video bg-black/50 rounded-xl border border-zinc-800/50 flex flex-col items-center justify-center space-y-4 border-dashed">
+            <div class="aspect-video bg-ng-bg-deep/80 border border-ng flex flex-col items-center justify-center space-y-3" style="clip-path: var(--ng-clip-card-sm)">
               <div class="relative">
-                <Globe size={48} class="text-zinc-800 animate-pulse" />
-                <div class="absolute top-0 right-0 w-3 h-3 bg-indigo-500 rounded-full animate-ping"></div>
+                <Globe size={40} class="text-ng-border animate-pulse" />
+                <div class="absolute top-0 right-0 w-2 h-2 bg-cyan-ng animate-ping" style="clip-path: var(--ng-clip-badge)"></div>
               </div>
-              <span class="text-xs font-mono text-zinc-600 uppercase tracking-widest">
+              <span class="text-[10px] font-mono text-ng-muted uppercase tracking-widest font-data">
                 Awaiting Spatial Data
               </span>
             </div>
@@ -156,22 +163,22 @@ export default function Home() {
         </div>
 
         {/* Sidebar: System Logs & Org Info */}
-        <div class="space-y-8">
-          <h2 class="text-xl font-bold text-white flex items-center gap-2">
-            <Layers size={20} class="text-zinc-400" />
+        <div class="space-y-6">
+          <div class="ng-section-header">
+            <Layers size={14} />
             Live Telemetry
-          </h2>
-          <div class="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden divide-y divide-zinc-800/50">
-            <div class="p-4 bg-zinc-950/50 flex items-center justify-between">
-              <span class="text-xs font-mono text-zinc-500 uppercase">
+          </div>
+          <div class="ng-card overflow-hidden">
+            <div class="p-3 bg-ng-bg-deep/50 border-b border-ng flex items-center justify-between">
+              <span class="text-[10px] font-data text-ng-muted uppercase tracking-widest">
                 Event Log
               </span>
-              <span class="flex items-center gap-1.5 text-[10px] text-green-500 font-bold bg-green-500/10 px-2 py-0.5 rounded-full border border-green-500/20">
-                <div class="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
-                STREAMING
+              <span class="flex items-center gap-1.5 text-[9px] font-bold text-online font-data uppercase tracking-wider px-2 py-0.5 border border-green-500/20" style="clip-path: var(--ng-clip-badge)">
+                <div class="w-1 h-1 bg-online rounded-full"></div>
+                Streaming
               </span>
             </div>
-            <div class="p-6 space-y-6">
+            <div class="p-4 space-y-4">
               <LogEntry
                 time="2m ago"
                 msg="Agent 'Code Master' initialized"
@@ -194,41 +201,41 @@ export default function Home() {
               />
 
               <Show when={!stats()}>
-                <div class="py-10 text-center text-zinc-600 text-sm italic">
+                <div class="py-8 text-center text-ng-muted text-xs font-data italic">
                   Initializing telemetry stream...
                 </div>
               </Show>
             </div>
-            <button class="w-full py-3 text-xs text-zinc-500 hover:text-white hover:bg-zinc-800 transition-all font-medium">
+            <button class="w-full py-3 text-[10px] font-bold uppercase tracking-widest text-ng-muted hover:text-cyan-ng hover:bg-ng-bg-hover transition-all font-data border-t border-ng">
               View Audit Trail
             </button>
           </div>
 
           {/* Organization Snapshot */}
-          <div class="bg-linear-to-br from-zinc-900 to-zinc-950 border border-zinc-800 rounded-2xl p-6">
-            <h3 class="text-xs font-mono text-zinc-500 uppercase mb-4 tracking-widest">
+          <div class="ng-card p-5">
+            <h3 class="text-[10px] font-data text-ng-muted uppercase tracking-widest mb-4">
               Identity Context
             </h3>
-            <div class="flex items-center gap-4 mb-6">
-              <div class="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-9 h-9 flex items-center justify-center text-white font-bold text-sm font-data" style="clip-path: var(--ng-clip-card-sm); background: linear-gradient(135deg, var(--ng-cyan-dim), var(--ng-magenta-dim))">
                 {authState.organization?.name.charAt(0)}
               </div>
               <div>
-                <div class="text-sm font-bold text-white">
+                <div class="text-sm font-bold text-white font-data tracking-wider">
                   {authState.organization?.name}
                 </div>
-                <div class="text-[10px] text-zinc-500 uppercase font-mono">
+                <div class="text-[9px] text-ng-muted uppercase font-data tracking-widest">
                   {authState.organization?.plan} PLAN
                 </div>
               </div>
             </div>
-            <div class="space-y-3">
-              <div class="flex justify-between text-xs">
-                <span class="text-zinc-500">Project Members</span>
-                <span class="text-zinc-300">1 / 10</span>
+            <div class="space-y-2">
+              <div class="flex justify-between text-[10px] font-data">
+                <span class="text-ng-muted uppercase tracking-wider">Project Members</span>
+                <span class="text-ng-secondary">1 / 10</span>
               </div>
-              <div class="w-full bg-zinc-800 h-1 rounded-full overflow-hidden">
-                <div class="bg-indigo-500 h-full w-[10%]"></div>
+              <div class="w-full bg-ng-bg-deep h-1 overflow-hidden" style="clip-path: var(--ng-clip-card-sm)">
+                <div class="h-full w-[10%]" style="background: linear-gradient(90deg, var(--ng-cyan), var(--ng-magenta))"></div>
               </div>
             </div>
           </div>
@@ -245,17 +252,17 @@ function StatCard(props: {
   trend: string;
 }) {
   return (
-    <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 hover:border-zinc-700 transition-all group shadow-lg shadow-black/20">
-      <div class="flex justify-between items-start mb-4">
-        <div class="p-2 bg-zinc-950 rounded-lg border border-zinc-800 group-hover:border-zinc-700 transition-colors">
+    <div class="ng-card p-5 group">
+      <div class="flex justify-between items-start mb-3">
+        <div class="p-2 bg-ng-bg-deep border border-ng group-hover:border-cyan-ng/30 transition-colors" style="clip-path: var(--ng-clip-card-sm)">
           {props.icon}
         </div>
-        <span class="text-[10px] font-mono text-zinc-500 uppercase tracking-tighter">
+        <span class="text-[9px] font-data text-ng-muted uppercase tracking-tighter">
           {props.trend}
         </span>
       </div>
-      <div class="text-2xl font-bold text-white mb-1">{props.value}</div>
-      <div class="text-xs text-zinc-500 font-medium uppercase tracking-wider">
+      <div class="text-2xl font-bold text-white mb-1 font-data">{props.value}</div>
+      <div class="text-[10px] text-ng-muted font-bold uppercase tracking-widest font-data">
         {props.title}
       </div>
     </div>
@@ -267,29 +274,29 @@ function ActionCard(props: {
   title: string;
   desc: string;
   icon: any;
-  color: string;
+  accent: "cyan" | "magenta";
 }) {
+  const accentColor = () => props.accent === "cyan" ? "var(--ng-cyan)" : "var(--ng-magenta)";
+  const accentGlow = () => props.accent === "cyan" ? "var(--ng-cyan-glow)" : "var(--ng-magenta-glow)";
+  const accentDim = () => props.accent === "cyan" ? "text-cyan-ng" : "text-magenta-ng";
+
   return (
     <A
       href={props.href}
-      class="group relative bg-zinc-900 border border-zinc-800 rounded-2xl p-6 hover:border-indigo-500/50 transition-all overflow-hidden"
+      class="ng-card p-5 group cursor-pointer"
     >
-      <div class="absolute -right-6 -top-6 w-24 h-24 bg-indigo-500/5 rounded-full blur-2xl group-hover:bg-indigo-500/10 transition-all"></div>
-      <div class="flex items-center gap-4 mb-4">
-        <div
-          class={`p-3 bg-zinc-950 rounded-xl border border-zinc-800 group-hover:border-indigo-500/30 transition-colors ${
-            props.color === "indigo" ? "text-indigo-400" : "text-cyan-400"
-          }`}
-        >
+      <div class="absolute -right-6 -top-6 w-20 h-20 rounded-full blur-2xl transition-all opacity-0 group-hover:opacity-100" style={`background: ${accentGlow()}`}></div>
+      <div class="flex items-center gap-3 mb-3">
+        <div class={`p-2.5 bg-ng-bg-deep border border-ng group-hover:border-cyan-ng/30 transition-colors ${accentDim()}`} style="clip-path: var(--ng-clip-card-sm)">
           {props.icon}
         </div>
-        <h3 class="text-lg font-bold text-white group-hover:text-indigo-400 transition-colors">
+        <h3 class="text-base font-bold text-white group-hover:text-cyan-ng transition-colors font-data tracking-wider">
           {props.title}
         </h3>
       </div>
-      <p class="text-sm text-zinc-400 leading-relaxed mb-4">{props.desc}</p>
-      <div class="flex items-center gap-2 text-xs font-bold text-zinc-500 group-hover:text-white transition-colors">
-        PROCEED <ArrowUpRight size={14} />
+      <p class="text-xs text-ng-secondary leading-relaxed mb-3">{props.desc}</p>
+      <div class="flex items-center gap-2 text-[10px] font-bold text-ng-muted group-hover:text-cyan-ng transition-colors font-data uppercase tracking-widest">
+        PROCEED <ArrowUpRight size={12} />
       </div>
     </A>
   );
@@ -300,20 +307,19 @@ function LogEntry(props: {
   msg: string;
   status: "success" | "info" | "warning";
 }) {
+  const dotColor = () =>
+    props.status === "success"
+      ? "bg-online"
+      : props.status === "warning"
+      ? "bg-warning"
+      : "bg-cyan-ng";
+
   return (
     <div class="flex items-start gap-3">
-      <div
-        class={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${
-          props.status === "success"
-            ? "bg-green-500"
-            : props.status === "warning"
-            ? "bg-amber-500"
-            : "bg-indigo-500"
-        }`}
-      ></div>
+      <div class={`mt-1.5 w-1.5 h-1.5 shrink-0 ${dotColor()}`} style="clip-path: var(--ng-clip-badge)"></div>
       <div class="flex-1">
-        <p class="text-xs text-zinc-300 leading-snug">{props.msg}</p>
-        <span class="text-[10px] text-zinc-600 font-mono">{props.time}</span>
+        <p class="text-xs text-ng-secondary leading-snug">{props.msg}</p>
+        <span class="text-[9px] text-ng-muted font-data">{props.time}</span>
       </div>
     </div>
   );

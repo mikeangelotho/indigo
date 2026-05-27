@@ -26,7 +26,6 @@ export default function NodesDashboard() {
     fetchNodes
   );
 
-  // Reconcile resource → store
   createEffect(() => {
     const data = nodes();
     if (data) {
@@ -50,41 +49,41 @@ export default function NodesDashboard() {
   };
 
   return (
-    <main class="max-w-7xl mx-auto p-6 space-y-8">
-      <div class="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-zinc-800 pb-6">
+    <main class="max-w-7xl mx-auto p-6 space-y-6">
+      <div class="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-ng pb-4">
         <div>
-          <h1 class="text-3xl font-bold tracking-tight text-white flex items-center gap-3">
-            <Server class="text-indigo-500" /> Compute Grid
+          <h1 class="text-2xl font-bold tracking-tight text-white font-data flex items-center gap-3">
+            <Server class="text-cyan-ng" size={22} /> Compute Grid
           </h1>
-          <p class="text-zinc-400 mt-2">
+          <p class="text-ng-secondary text-sm mt-1">
             Manage distributed inference workers and GPU sharding.
           </p>
         </div>
 
         <button
           onClick={() => refetchNodes()}
-          class="flex items-center gap-2 px-4 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-sm font-medium transition-all group"
+          class="btn-secondary flex items-center gap-2 group"
         >
           <RefreshCw
-            size={16}
-            class={`text-zinc-400 group-hover:text-white ${
+            size={14}
+            class={`text-ng-secondary group-hover:text-cyan-ng ${
               nodes.loading ? "animate-spin" : ""
             }`}
           />
-          <span>{nodes.loading ? "Syncing..." : "Refresh Signal"}</span>
+          <span class="text-xs font-bold uppercase tracking-wider font-data">{nodes.loading ? "Syncing" : "Refresh"}</span>
         </button>
       </div>
 
       <Show when={nodes.error}>
-        <div class="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-lg flex items-center gap-3">
-          <TriangleAlert size={20} />
-          <p>
-            Failed to connect to Hub at <span class="font-mono text-xs bg-red-500/20 px-1 py-0.5 rounded">{settingsStore.activeHub}</span>. Is the backend running?
+        <div class="ng-card border-offline/20 p-4 flex items-center gap-3">
+          <TriangleAlert size={18} class="text-offline" />
+          <p class="text-sm text-offline">
+            Failed to connect to Hub at <span class="font-data text-xs px-1.5 py-0.5 bg-offline/10" style="clip-path: var(--ng-clip-badge)">{settingsStore.activeHub}</span>. Is the backend running?
           </p>
         </div>
       </Show>
 
-      <div class="grid grid-cols-1 xl:grid-cols-3 gap-8 items-start">
+      <div class="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
         <div class="xl:col-span-1">
           <SpawnNode
             activeHostModels={activeHostModels}
@@ -93,7 +92,7 @@ export default function NodesDashboard() {
           />
         </div>
 
-        <div class="xl:col-span-2 space-y-4">
+        <div class="xl:col-span-2 space-y-3">
           <NodeGrid nodes={nodeStore.data} loading={nodes.loading} />
         </div>
       </div>

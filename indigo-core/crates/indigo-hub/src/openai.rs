@@ -1,3 +1,4 @@
+use crate::tool_executor::ToolExecutor;
 use axum::{
     extract::State,
     response::{
@@ -12,18 +13,24 @@ use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::SystemTime;
-use crate::tool_executor::ToolExecutor;
 use tokio_stream::StreamExt;
 use tonic::Request;
 
 use indigo_common::{
-    ChatMessage, inference::{InferenceRequest as GrpcInferenceRequest, InferenceResponse as GrpcInferenceResponse, inference_service_client::InferenceServiceClient},
+    inference::{
+        inference_service_client::InferenceServiceClient, InferenceRequest as GrpcInferenceRequest,
+        InferenceResponse as GrpcInferenceResponse,
+    },
+    ChatMessage,
 };
 
 use prost::Message;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{convert_common_tool_to_protobuf, AppState};
+
+// Agentic loop configuration
+const MAX_TOOL_ITERATIONS: usize = 10;
 
 #[derive(Deserialize, Debug)]
 pub struct OpenAIChatRequest {
@@ -260,12 +267,21 @@ impl ToolParser {
             // Try to extract valid JSON from buffer
             if let Some(tc) = tool_call {
                 self.buffer.clear();
-                return (text, Some(tc));
+                let cleaned = text.map(|t| Self::strip_template_tokens(&t));
+                return (cleaned.filter(|s| !s.is_empty()), Some(tc));
             } else {
                 // Extract text before potential JSON
                 if let Some(txt) = text {
                     self.buffer.clear();
-                    return (Some(txt), None);
+                    let cleaned = Self::strip_template_tokens(&txt);
+                    return (
+                        if cleaned.is_empty() {
+                            None
+                        } else {
+                            Some(cleaned)
+                        },
+                        None,
+                    );
                 }
             }
         }
@@ -320,25 +336,25 @@ impl ToolParser {
             // This is a naive regex fix but catches common cases
             let re_keys = Regex::new(r"(\s*)(\w+)(\s*):").unwrap();
             let fixed_json = re_keys.replace_all(json_str, r#"$1"$2"$3:"#);
-            
-            // Also need to quote string values if they aren't quoted? 
-            // That's much harder to do safely with regex. 
+
+            // Also need to quote string values if they aren't quoted?
+            // That's much harder to do safely with regex.
             // Let's rely on the prompt instructions for values, but keys are the main issue.
 
             if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&fixed_json) {
-                 if let Some(tool_call) = Self::try_parse_tool_formats(&json_value) {
+                if let Some(tool_call) = Self::try_parse_tool_formats(&json_value) {
                     eprintln!(
                         "TOOL_PARSER: Tool call detected (relaxed JSON): {} via format detection",
                         tool_call.function.name
                     );
-                     let prefix = &buffer[..mat.start()];
+                    let prefix = &buffer[..mat.start()];
                     let content = if !prefix.trim().is_empty() {
                         Some(prefix.trim().to_string())
                     } else {
                         None
                     };
                     return (content, Some(tool_call));
-                 }
+                }
             }
         }
 
@@ -351,8 +367,30 @@ impl ToolParser {
         } else {
             let s = self.buffer.clone();
             self.buffer.clear();
-            Some(s)
+            // Strip chat template tokens that leaked through
+            let cleaned = Self::strip_template_tokens(&s);
+            if cleaned.is_empty() {
+                None
+            } else {
+                Some(cleaned)
+            }
         }
+    }
+
+    /// Strip known chat template tokens from streamed text
+    fn strip_template_tokens(s: &str) -> String {
+        let mut out = s.to_string();
+        for token in &[
+            "<|im_end|>",
+            "<|im_start|>",
+            "<|eot_id|>",
+            "<end_of_turn>",
+            "<|endoftext|>",
+            "<|end|>",
+        ] {
+            out = out.replace(token, "");
+        }
+        out.trim().to_string()
     }
 
     pub fn parse_static(content: &str) -> (String, Option<Vec<ToolCall>>, String) {
@@ -388,21 +426,27 @@ impl ToolParser {
 
         if !tool_calls.is_empty() {
             return (
-                final_content.trim().to_string(),
+                Self::strip_template_tokens(final_content.trim()),
                 Some(tool_calls),
                 "tool_calls".to_string(),
             );
         }
 
-        (content.to_string(), None, "stop".to_string())
+        (
+            Self::strip_template_tokens(content),
+            None,
+            "stop".to_string(),
+        )
     }
 
     fn try_parse_tool_formats(json_value: &serde_json::Value) -> Option<ToolCall> {
         // Try to parse Indigo format: {"function_name": "tool_name", "arguments": {...}}
         if let Some(function_name) = json_value.get("function_name") {
             if let Some(args) = json_value.get("arguments") {
-                // Found complete Indigo format tool call
-                let name = function_name.as_str().map(|s| s.to_string()).unwrap_or_else(|| function_name.to_string());
+                let name = function_name
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| function_name.to_string());
                 let arguments = if args.is_string() {
                     args.as_str().unwrap_or("{}").to_string()
                 } else {
@@ -413,18 +457,46 @@ impl ToolParser {
                     index: 0,
                     id: format!("call_{}", uuid::Uuid::new_v4().simple()),
                     r#type: "function".to_string(),
-                    function: FunctionCall {
-                        name,
-                        arguments,
-                    },
+                    function: FunctionCall { name, arguments },
                 });
+            }
+        }
+
+        // Try to parse OpenAI standard format: {"name": "tool_name", "arguments": {...}}
+        // NOTE: Must check this BEFORE Anthropic format since both use "name" key
+        if json_value.get("function_name").is_none() {
+            if let Some(name) = json_value.get("name") {
+                if let Some(args) = json_value.get("arguments") {
+                    let tool_name = name
+                        .as_str()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| name.to_string());
+                    let arguments = if args.is_string() {
+                        args.as_str().unwrap_or("{}").to_string()
+                    } else {
+                        args.to_string()
+                    };
+
+                    return Some(ToolCall {
+                        index: 0,
+                        id: format!("call_{}", uuid::Uuid::new_v4().simple()),
+                        r#type: "function".to_string(),
+                        function: FunctionCall {
+                            name: tool_name,
+                            arguments,
+                        },
+                    });
+                }
             }
         }
 
         // Try to parse Anthropic format: {"name": "...", "input": {...}}
         if let Some(name) = json_value.get("name") {
             if let Some(input) = json_value.get("input") {
-                let tool_name = name.as_str().map(|s| s.to_string()).unwrap_or_else(|| name.to_string());
+                let tool_name = name
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| name.to_string());
                 let arguments = if input.is_string() {
                     input.as_str().unwrap_or("{}").to_string()
                 } else {
@@ -696,7 +768,7 @@ pub async fn proxy_chat_completions(
         prompt: prompt_payload,
         max_tokens: req.max_tokens.unwrap_or(4096),
         temperature: req.temperature.unwrap_or(0.7),
-        image_data: image_data.unwrap_or_default(),
+        image_data: image_data.clone().unwrap_or_default(),
         stop: vec![],
         model_name: model_name.clone(),
         tools: tools,
@@ -764,10 +836,10 @@ pub async fn proxy_chat_completions(
                                     tc.index = tool_index;
                                     tool_index += 1;
                                     tool_emitted = true;
-                                    
+
                                     // Store a copy for execution
                                     let tc_clone = tc.clone();
-                                    
+
                                     yield Event::default().json_data(OpenAIStreamResponse {
                                         id: id.clone(),
                                         object: "chat.completion.chunk".to_string(),
@@ -779,15 +851,15 @@ pub async fn proxy_chat_completions(
                                             finish_reason: None,
                                         }],
                                     }).map_err(axum::Error::new)?;
-                                    
+
                                     // Execute tool and stream result (FIX: Add missing tool execution in proxy)
                                     eprintln!("PROXY_TOOL_EXECUTOR: Executing tool: {}", tc_clone.function.name);
-                                    
+
                                     // Clone necessary data before async block to fix lifetime issues
                                     let tool_name = tc_clone.function.name.clone();
                                     let tool_args = tc_clone.function.arguments.clone();
                                     let tool_executor = state.tool_executor.clone();
-                                    
+
                                     // Get tool definition before async block to avoid lifetime issues
                                     let tool_def = {
                                         let registry = state.tool_registry.read().unwrap();
@@ -797,19 +869,19 @@ pub async fn proxy_chat_completions(
                                             .map(|t| t.name.clone())
                                             .collect();
                                         eprintln!("PROXY_TOOL_EXECUTOR: Available tools: {:?}", available_tools);
-                                        
+
                                         registry
                                             .list_tools()
                                             .into_iter()
                                             .find(|t| t.name == tool_name)
                                             .cloned() // Clone the tool definition to avoid borrowing issues
                                     };
-                                    
+
                                     let tool_output = {
                                         if let Some(td) = tool_def {
                                             eprintln!("PROXY_TOOL_EXECUTOR: Found tool definition: {} (type: {:?})", td.name, td.config);
-                                            let mut executor = tool_executor.write().await;
-                                            let args: serde_json::Value = 
+                                            let executor = tool_executor.write().await;
+                                            let args: serde_json::Value =
                                                 serde_json::from_str(&tool_args).unwrap_or_default();
                                             eprintln!("PROXY_TOOL_EXECUTOR: Tool arguments: {}", args);
                                             match executor.execute_tool(&td, &args).await {
@@ -859,56 +931,176 @@ pub async fn proxy_chat_completions(
             .keep_alive(axum::response::sse::KeepAlive::default())
             .into_response()
     } else {
-        match client.run_inference(Request::new(grpc_req)).await {
-            Ok(resp) => {
-                let mut grpc_stream = resp.into_inner();
-                let mut full_content = String::new();
-                while let Some(Ok(item)) = grpc_stream.next().await {
-                    if item.status == 1 {
-                        break;
-                    }
-                    full_content.push_str(&item.token);
-                }
+        // Proxy non-streaming: Agentic loop with tool execution
+        let mut conversation_messages = indigo_messages.clone();
+        let mut last_assistant_content = String::new();
+        let mut last_tool_calls: Option<Vec<ToolCall>> = None;
+        let mut last_finish_reason = String::new();
+        let mut iteration = 0;
 
-                let (final_content, tool_calls, finish_reason) =
-                    ToolParser::parse_static(&full_content);
-
-                let response = OpenAIResponse {
-                    id,
-                    object: "chat.completion".to_string(),
-                    created,
-                    model: model_name,
-                    choices: vec![Choice {
-                        index: 0,
-                        message: OpenAIMessage {
-                            role: "assistant".to_string(),
-                            content: if final_content.is_empty() {
-                                serde_json::Value::Null
-                            } else {
-                                serde_json::Value::String(final_content)
-                            },
-                            tool_calls,
-                            tool_call_id: None,
-                        },
-                        finish_reason,
-                    }],
-                    usage: Usage {
-                        prompt_tokens: 0,
-                        completion_tokens: 0,
-                        total_tokens: 0,
-                    },
-                };
-                Json(response).into_response()
+        loop {
+            iteration += 1;
+            if iteration > MAX_TOOL_ITERATIONS {
+                eprintln!(
+                    "AGENTIC_LOOP (proxy): Max iterations ({}) reached",
+                    MAX_TOOL_ITERATIONS
+                );
+                last_finish_reason = "tool_calls".to_string();
+                break;
             }
-            Err(e) => (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(OpenAIErrorResponse::new(
-                    format!("Inference failed: {}", e),
-                    Some("inference_error".into()),
-                )),
-            )
-                .into_response(),
+
+            let current_prompt = serde_json::to_string(&conversation_messages).unwrap_or_default();
+
+            let tools = {
+                let registry = state.tool_registry.read().unwrap();
+                registry
+                    .list_tools()
+                    .into_iter()
+                    .map(convert_common_tool_to_protobuf)
+                    .collect::<Vec<_>>()
+            };
+
+            let current_grpc_req = GrpcInferenceRequest {
+                prompt: current_prompt,
+                max_tokens: req.max_tokens.unwrap_or(4096),
+                temperature: req.temperature.unwrap_or(0.7),
+                image_data: image_data.clone().unwrap_or_default(),
+                stop: vec![],
+                model_name: model_name.clone(),
+                tools,
+            };
+
+            let mut client =
+                match InferenceServiceClient::connect(state.target_address.clone()).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return (
+                            axum::http::StatusCode::BAD_GATEWAY,
+                            Json(OpenAIErrorResponse::new(
+                                format!("Failed to connect to proxy target: {}", e),
+                                Some("connection_error".into()),
+                            )),
+                        )
+                            .into_response();
+                    }
+                };
+
+            let resp = match client.run_inference(Request::new(current_grpc_req)).await {
+                Ok(r) => r,
+                Err(e) => {
+                    return (
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(OpenAIErrorResponse::new(
+                            format!("Inference failed: {}", e),
+                            Some("inference_error".into()),
+                        )),
+                    )
+                        .into_response();
+                }
+            };
+
+            let mut grpc_stream = resp.into_inner();
+            let mut full_content = String::new();
+            while let Some(Ok(item)) = grpc_stream.next().await {
+                if item.status == 1 {
+                    break;
+                }
+                full_content.push_str(&item.token);
+            }
+
+            let (content, tool_calls, finish_reason) = ToolParser::parse_static(&full_content);
+
+            last_assistant_content = content;
+            last_tool_calls = tool_calls.clone();
+            last_finish_reason = finish_reason;
+
+            let Some(tc_list) = tool_calls else {
+                break;
+            };
+
+            if tc_list.is_empty() {
+                break;
+            }
+
+            eprintln!(
+                "AGENTIC_LOOP (proxy): Iteration {}, executing {} tool call(s)",
+                iteration,
+                tc_list.len()
+            );
+
+            conversation_messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: serde_json::Value::String(last_assistant_content.clone()),
+                tool_calls: Some(serde_json::to_value(&tc_list).unwrap_or(serde_json::Value::Null)),
+                tool_call_id: None,
+            });
+
+            let executor = state.tool_executor.read().await;
+            for tc in &tc_list {
+                let tool_result = {
+                    let tool_def = {
+                        let registry = state.tool_registry.read().unwrap();
+                        registry
+                            .list_tools()
+                            .into_iter()
+                            .find(|t| t.name == tc.function.name)
+                            .cloned()
+                    };
+
+                    if let Some(td) = tool_def {
+                        let args: serde_json::Value =
+                            serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                        match executor.execute_tool(&td, &args).await {
+                            Ok(res) => res,
+                            Err(e) => format!("Error executing tool: {}", e),
+                        }
+                    } else {
+                        match executor.execute_tool_call(
+                            &tc.function.name,
+                            &serde_json::from_str(&tc.function.arguments).unwrap_or_default(),
+                        ) {
+                            Ok(res) => res,
+                            Err(e) => format!("Tool '{}' not found: {}", tc.function.name, e),
+                        }
+                    }
+                };
+
+                conversation_messages.push(ChatMessage {
+                    role: "tool".to_string(),
+                    content: serde_json::Value::String(tool_result),
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                });
+            }
+            drop(executor);
         }
+
+        let response = OpenAIResponse {
+            id,
+            object: "chat.completion".to_string(),
+            created,
+            model: model_name,
+            choices: vec![Choice {
+                index: 0,
+                message: OpenAIMessage {
+                    role: "assistant".to_string(),
+                    content: if last_assistant_content.is_empty() {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::Value::String(last_assistant_content)
+                    },
+                    tool_calls: last_tool_calls,
+                    tool_call_id: None,
+                },
+                finish_reason: last_finish_reason,
+            }],
+            usage: Usage {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+            },
+        };
+        Json(response).into_response()
     }
 }
 
@@ -1033,21 +1225,31 @@ pub async fn chat_completions(
 
     // Logic to determine which tools to show
     let (tools_json_str, tools_count) = if let Some(tools) = &req.tools {
-        (serde_json::to_string(tools).unwrap_or_default(), tools.len())
+        (
+            serde_json::to_string(tools).unwrap_or_default(),
+            tools.len(),
+        )
     } else {
         // Fallback to Registry Tools
         let registry = state.tool_registry.read().unwrap();
-        let tools: Vec<serde_json::Value> = registry.list_tools().into_iter().map(|t| {
-             serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.parameters
-                }
+        let tools: Vec<serde_json::Value> = registry
+            .list_tools()
+            .into_iter()
+            .map(|t| {
+                serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters
+                    }
+                })
             })
-        }).collect();
-        (serde_json::to_string(&tools).unwrap_or_default(), tools.len())
+            .collect();
+        (
+            serde_json::to_string(&tools).unwrap_or_default(),
+            tools.len(),
+        )
     };
 
     if tools_count > 0 {
@@ -1075,7 +1277,7 @@ pub async fn chat_completions(
 
         if should_inject {
             let tools_json = serde_json::to_string(tools).unwrap_or_default();
-            
+
             // Load format configuration
             let format_config = match std::fs::read_to_string("/etc/indigo/config.toml") {
                 Ok(config_content) => {
@@ -1094,7 +1296,7 @@ pub async fn chat_completions(
             } else {
                 indigo_common::ToolFormat::Indigo
             };
-            
+
             // Generate format-specific tool instructions
             let tool_instructions = match format_config {
                 indigo_common::ToolFormat::Indigo => format!(
@@ -1107,7 +1309,7 @@ pub async fn chat_completions(
                     "\nYou have access to the following tools:\n{}\n\nTo use a tool, you MUST use this exact syntax:\n[run tool_name arguments]\n\nExamples:\n[run list_files {{\"path\": \".\"}}]\n[run read_file {{\"path\": \"README.md\"}}]\n[run write_file {{\"path\": \"test.txt\", \"content\": \"Hello world\"}}]\n[run run_shell {{\"command\": \"ls -la\"}}]\n\nCRITICAL: Always use [run tool_name {{...}}] format. Never output raw commands."
                 ),
             };
-            
+
             let tool_prompt = format!(
                 "\n{}{}",
                 tools_json, tool_instructions
@@ -1234,7 +1436,7 @@ pub async fn chat_completions(
         prompt: prompt_payload,
         max_tokens: req.max_tokens.unwrap_or(4096),
         temperature: req.temperature.unwrap_or(0.7),
-        image_data: image_data.unwrap_or_default(),
+        image_data: image_data.clone().unwrap_or_default(),
         stop: vec![],
         model_name: model_name.clone(),
         tools: tools,
@@ -1464,28 +1666,165 @@ pub async fn chat_completions(
                     .keep_alive(axum::response::sse::KeepAlive::default())
                     .into_response();
             } else {
-                let mut full_content = String::new();
+                // Sidecar non-streaming: Agentic loop with tool execution
+                let mut conversation_messages = indigo_messages.clone();
+                let mut last_assistant_content = String::new();
+                let mut last_tool_calls: Option<Vec<ToolCall>> = None;
+                let mut last_finish_reason = String::new();
+                let mut iteration = 0;
+
                 loop {
-                    let mut len_buf = [0u8; 4];
-                    if handle.stdout.read_exact(&mut len_buf).await.is_err() {
-                        break;
-                    }
-                    let len = u32::from_be_bytes(len_buf) as usize;
-                    let mut msg_buf = vec![0u8; len];
-                    if handle.stdout.read_exact(&mut msg_buf).await.is_err() {
+                    iteration += 1;
+                    if iteration > MAX_TOOL_ITERATIONS {
+                        eprintln!(
+                            "AGENTIC_LOOP (sidecar): Max iterations ({}) reached",
+                            MAX_TOOL_ITERATIONS
+                        );
+                        last_finish_reason = "tool_calls".to_string();
                         break;
                     }
 
-                    if let Ok(resp) = GrpcInferenceResponse::decode(std::io::Cursor::new(msg_buf)) {
-                        if resp.status == 1 {
+                    // Serialize current conversation
+                    let current_prompt =
+                        serde_json::to_string(&conversation_messages).unwrap_or_default();
+
+                    // Get current tool definitions
+                    let tools = {
+                        let registry = state.tool_registry.read().unwrap();
+                        registry
+                            .list_tools()
+                            .into_iter()
+                            .map(convert_common_tool_to_protobuf)
+                            .collect::<Vec<_>>()
+                    };
+
+                    let current_grpc_req = GrpcInferenceRequest {
+                        prompt: current_prompt,
+                        max_tokens: req.max_tokens.unwrap_or(4096),
+                        temperature: req.temperature.unwrap_or(0.7),
+                        image_data: image_data.clone().unwrap_or_default(),
+                        stop: vec![],
+                        model_name: model_name.clone(),
+                        tools,
+                    };
+
+                    // Send request to sidecar
+                    let req_bytes = current_grpc_req.encode_to_vec();
+                    let len_bytes = (req_bytes.len() as u32).to_be_bytes();
+
+                    if handle.stdin.write_all(&len_bytes).await.is_err()
+                        || handle.stdin.write_all(&req_bytes).await.is_err()
+                        || handle.stdin.flush().await.is_err()
+                    {
+                        return (
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(OpenAIErrorResponse::new(
+                                "Sidecar IO Error",
+                                Some("sidecar_io_error".into()),
+                            )),
+                        )
+                            .into_response();
+                    }
+
+                    // Read response from sidecar
+                    let mut full_content = String::new();
+                    loop {
+                        let mut len_buf = [0u8; 4];
+                        if handle.stdout.read_exact(&mut len_buf).await.is_err() {
                             break;
                         }
-                        full_content.push_str(&resp.token);
-                    }
-                }
+                        let len = u32::from_be_bytes(len_buf) as usize;
+                        let mut msg_buf = vec![0u8; len];
+                        if handle.stdout.read_exact(&mut msg_buf).await.is_err() {
+                            break;
+                        }
 
-                let (final_content, tool_calls, finish_reason) =
-                    ToolParser::parse_static(&full_content);
+                        if let Ok(resp) =
+                            GrpcInferenceResponse::decode(std::io::Cursor::new(msg_buf))
+                        {
+                            if resp.status == 1 {
+                                break;
+                            }
+                            full_content.push_str(&resp.token);
+                        }
+                    }
+
+                    let (content, tool_calls, finish_reason) =
+                        ToolParser::parse_static(&full_content);
+
+                    last_assistant_content = content;
+                    last_tool_calls = tool_calls.clone();
+                    last_finish_reason = finish_reason;
+
+                    // If no tool calls, we're done
+                    let Some(tc_list) = tool_calls else {
+                        break;
+                    };
+
+                    if tc_list.is_empty() {
+                        break;
+                    }
+
+                    eprintln!(
+                        "AGENTIC_LOOP (sidecar): Iteration {}, executing {} tool call(s)",
+                        iteration,
+                        tc_list.len()
+                    );
+
+                    // Append assistant message with tool calls
+                    conversation_messages.push(ChatMessage {
+                        role: "assistant".to_string(),
+                        content: serde_json::Value::String(last_assistant_content.clone()),
+                        tool_calls: Some(
+                            serde_json::to_value(&tc_list).unwrap_or(serde_json::Value::Null),
+                        ),
+                        tool_call_id: None,
+                    });
+
+                    // Execute each tool and append results
+                    let executor = state.tool_executor.read().await;
+                    for tc in &tc_list {
+                        let tool_result = {
+                            let tool_def = {
+                                let registry = state.tool_registry.read().unwrap();
+                                registry
+                                    .list_tools()
+                                    .into_iter()
+                                    .find(|t| t.name == tc.function.name)
+                                    .cloned()
+                            };
+
+                            if let Some(td) = tool_def {
+                                let args: serde_json::Value =
+                                    serde_json::from_str(&tc.function.arguments)
+                                        .unwrap_or_default();
+                                match executor.execute_tool(&td, &args).await {
+                                    Ok(res) => res,
+                                    Err(e) => format!("Error executing tool: {}", e),
+                                }
+                            } else {
+                                match executor.execute_tool_call(
+                                    &tc.function.name,
+                                    &serde_json::from_str(&tc.function.arguments)
+                                        .unwrap_or_default(),
+                                ) {
+                                    Ok(res) => res,
+                                    Err(e) => {
+                                        format!("Tool '{}' not found: {}", tc.function.name, e)
+                                    }
+                                }
+                            }
+                        };
+
+                        conversation_messages.push(ChatMessage {
+                            role: "tool".to_string(),
+                            content: serde_json::Value::String(tool_result),
+                            tool_calls: None,
+                            tool_call_id: Some(tc.id.clone()),
+                        });
+                    }
+                    drop(executor);
+                }
 
                 let response = OpenAIResponse {
                     id,
@@ -1496,15 +1835,15 @@ pub async fn chat_completions(
                         index: 0,
                         message: OpenAIMessage {
                             role: "assistant".to_string(),
-                            content: if final_content.is_empty() {
+                            content: if last_assistant_content.is_empty() {
                                 serde_json::Value::Null
                             } else {
-                                serde_json::Value::String(final_content)
+                                serde_json::Value::String(last_assistant_content)
                             },
-                            tool_calls,
+                            tool_calls: last_tool_calls,
                             tool_call_id: None,
                         },
-                        finish_reason,
+                        finish_reason: last_finish_reason,
                     }],
                     usage: Usage {
                         prompt_tokens: 0,
@@ -1527,7 +1866,7 @@ pub async fn chat_completions(
     }
 
     // 4. Connect to Node (gRPC)
-    let mut client = match InferenceServiceClient::connect(node_address).await {
+    let mut client = match InferenceServiceClient::connect(node_address.clone()).await {
         Ok(c) => c,
         Err(e) => {
             return (
@@ -1684,56 +2023,182 @@ pub async fn chat_completions(
             .keep_alive(axum::response::sse::KeepAlive::default())
             .into_response()
     } else {
-        // Non-streaming: Collect all tokens
-        match client.run_inference(Request::new(grpc_req)).await {
-            Ok(resp) => {
-                let mut grpc_stream = resp.into_inner();
-                let mut full_content = String::new();
-                while let Some(Ok(item)) = grpc_stream.next().await {
-                    if item.status == 1 {
-                        break;
-                    } // Done
-                    full_content.push_str(&item.token);
-                }
+        // Non-streaming: Agentic loop with tool execution
+        let mut conversation_messages = indigo_messages.clone();
+        let mut last_assistant_content = String::new();
+        let mut last_tool_calls: Option<Vec<ToolCall>> = None;
+        let mut last_finish_reason = String::new();
+        let mut iteration = 0;
 
-                let (final_content, tool_calls, finish_reason) =
-                    ToolParser::parse_static(&full_content);
-
-                let response = OpenAIResponse {
-                    id,
-                    object: "chat.completion".to_string(),
-                    created,
-                    model: model_name,
-                    choices: vec![Choice {
-                        index: 0,
-                        message: OpenAIMessage {
-                            role: "assistant".to_string(),
-                            content: if final_content.is_empty() {
-                                serde_json::Value::Null
-                            } else {
-                                serde_json::Value::String(final_content)
-                            },
-                            tool_calls,
-                            tool_call_id: None,
-                        },
-                        finish_reason,
-                    }],
-                    usage: Usage {
-                        prompt_tokens: 0,
-                        completion_tokens: 0,
-                        total_tokens: 0,
-                    },
-                };
-                Json(response).into_response()
+        loop {
+            iteration += 1;
+            if iteration > MAX_TOOL_ITERATIONS {
+                eprintln!(
+                    "AGENTIC_LOOP: Max iterations ({}) reached, stopping",
+                    MAX_TOOL_ITERATIONS
+                );
+                last_finish_reason = "tool_calls".to_string();
+                break;
             }
-            Err(e) => (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(OpenAIErrorResponse::new(
-                    format!("Inference failed: {}", e),
-                    Some("inference_error".into()),
-                )),
-            )
-                .into_response(),
+
+            // Serialize current conversation
+            let current_prompt = serde_json::to_string(&conversation_messages).unwrap_or_default();
+
+            // Get current tool definitions
+            let tools = {
+                let registry = state.tool_registry.read().unwrap();
+                registry
+                    .list_tools()
+                    .into_iter()
+                    .map(convert_common_tool_to_protobuf)
+                    .collect::<Vec<_>>()
+            };
+
+            let current_grpc_req = GrpcInferenceRequest {
+                prompt: current_prompt,
+                max_tokens: req.max_tokens.unwrap_or(4096),
+                temperature: req.temperature.unwrap_or(0.7),
+                image_data: image_data.clone().unwrap_or_default(),
+                stop: vec![],
+                model_name: model_name.clone(),
+                tools,
+            };
+
+            // Run inference
+            let mut client = match InferenceServiceClient::connect(node_address.clone()).await {
+                Ok(c) => c,
+                Err(e) => {
+                    return (
+                        axum::http::StatusCode::BAD_GATEWAY,
+                        Json(OpenAIErrorResponse::new(
+                            format!("Failed to connect to node: {}", e),
+                            Some("connection_error".into()),
+                        )),
+                    )
+                        .into_response();
+                }
+            };
+
+            let resp = match client.run_inference(Request::new(current_grpc_req)).await {
+                Ok(r) => r,
+                Err(e) => {
+                    return (
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(OpenAIErrorResponse::new(
+                            format!("Inference failed: {}", e),
+                            Some("inference_error".into()),
+                        )),
+                    )
+                        .into_response();
+                }
+            };
+
+            let mut grpc_stream = resp.into_inner();
+            let mut full_content = String::new();
+            while let Some(Ok(item)) = grpc_stream.next().await {
+                if item.status == 1 {
+                    break;
+                }
+                full_content.push_str(&item.token);
+            }
+
+            let (content, tool_calls, finish_reason) = ToolParser::parse_static(&full_content);
+
+            last_assistant_content = content;
+            last_tool_calls = tool_calls.clone();
+            last_finish_reason = finish_reason;
+
+            // If no tool calls, we're done
+            let Some(tc_list) = tool_calls else {
+                break;
+            };
+
+            if tc_list.is_empty() {
+                break;
+            }
+
+            eprintln!(
+                "AGENTIC_LOOP: Iteration {}, executing {} tool call(s)",
+                iteration,
+                tc_list.len()
+            );
+
+            // Append assistant message with tool calls
+            conversation_messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: serde_json::Value::String(last_assistant_content.clone()),
+                tool_calls: Some(serde_json::to_value(&tc_list).unwrap_or(serde_json::Value::Null)),
+                tool_call_id: None,
+            });
+
+            // Execute each tool and append results
+            let executor = state.tool_executor.read().await;
+            for tc in &tc_list {
+                let tool_result = {
+                    let tool_def = {
+                        let registry = state.tool_registry.read().unwrap();
+                        registry
+                            .list_tools()
+                            .into_iter()
+                            .find(|t| t.name == tc.function.name)
+                            .cloned()
+                    };
+
+                    if let Some(td) = tool_def {
+                        let args: serde_json::Value =
+                            serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                        match executor.execute_tool(&td, &args).await {
+                            Ok(res) => res,
+                            Err(e) => format!("Error executing tool: {}", e),
+                        }
+                    } else {
+                        // Try the plugin registry directly
+                        match executor.execute_tool_call(
+                            &tc.function.name,
+                            &serde_json::from_str(&tc.function.arguments).unwrap_or_default(),
+                        ) {
+                            Ok(res) => res,
+                            Err(e) => format!("Tool '{}' not found: {}", tc.function.name, e),
+                        }
+                    }
+                };
+
+                // Append tool result message
+                conversation_messages.push(ChatMessage {
+                    role: "tool".to_string(),
+                    content: serde_json::Value::String(tool_result),
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                });
+            }
+            drop(executor);
         }
+
+        let response = OpenAIResponse {
+            id,
+            object: "chat.completion".to_string(),
+            created,
+            model: model_name,
+            choices: vec![Choice {
+                index: 0,
+                message: OpenAIMessage {
+                    role: "assistant".to_string(),
+                    content: if last_assistant_content.is_empty() {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::Value::String(last_assistant_content)
+                    },
+                    tool_calls: last_tool_calls,
+                    tool_call_id: None,
+                },
+                finish_reason: last_finish_reason,
+            }],
+            usage: Usage {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+            },
+        };
+        Json(response).into_response()
     }
 }

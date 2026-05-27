@@ -24,11 +24,11 @@ function ToolCallItem(props: { toolCall: ToolCall }) {
   const getStatusIcon = () => {
     switch (props.toolCall.status) {
       case "completed":
-        return <CheckCircle size={14} class="text-green-400" />;
+        return <CheckCircle size={14} class="text-online" />;
       case "error":
-        return <AlertCircle size={14} class="text-red-400" />;
+        return <AlertCircle size={14} class="text-offline" />;
       case "executing":
-        return <Terminal size={14} class="text-yellow-400 animate-pulse" />;
+        return <Terminal size={14} class="text-warning animate-pulse" />;
       default:
         return <Settings size={14} class="text-blue-400" />;
     }
@@ -48,13 +48,13 @@ function ToolCallItem(props: { toolCall: ToolCall }) {
   };
   
   return (
-    <div class="mb-3 border border-zinc-800 rounded-lg bg-zinc-900/50 overflow-hidden">
+    <div class="mb-3 border border-ng bg-ng-bg-surface overflow-hidden" style="clip-path: var(--ng-clip-card-sm)">
       <button
         onClick={() => setIsExpanded(!isExpanded())}
-        class="w-full px-3 py-2 flex items-center justify-between gap-2 hover:bg-zinc-800/50 transition-colors"
+        class="w-full px-3 py-2 flex items-center justify-between gap-2 hover:bg-ng-bg-hover transition-colors"
       >
         <div class="flex items-center gap-2">
-          <Terminal size={14} class="text-indigo-400" />
+          <Terminal size={14} class="text-cyan-ng" />
           <span class="text-sm font-medium text-white">
             {props.toolCall.function_name}
           </span>
@@ -74,16 +74,16 @@ function ToolCallItem(props: { toolCall: ToolCall }) {
       <Show when={isExpanded()}>
         <div class="border-t border-zinc-800 px-3 py-2 space-y-2">
           <div>
-            <div class="text-xs font-medium text-zinc-500 mb-1">Arguments:</div>
-            <pre class="text-xs text-zinc-300 bg-zinc-950 p-2 rounded border border-zinc-800 overflow-x-auto">
+            <div class="text-[10px] font-data uppercase tracking-widest text-ng-muted mb-1">Arguments:</div>
+            <pre class="text-xs text-ng-secondary bg-ng-bg-deep p-2 border border-ng overflow-x-auto font-data" style="clip-path: var(--ng-clip-card-sm)">
               {JSON.stringify(JSON.parse(props.toolCall.arguments || "{}"), null, 2)}
             </pre>
           </div>
           
           <Show when={props.toolCall.result}>
             <div>
-              <div class="text-xs font-medium text-zinc-500 mb-1">Result:</div>
-              <pre class="text-xs text-zinc-300 bg-zinc-950 p-2 rounded border border-zinc-800 overflow-x-auto whitespace-pre-wrap">
+              <div class="text-[10px] font-data uppercase tracking-widest text-ng-muted mb-1">Result:</div>
+              <pre class="text-xs text-ng-secondary bg-ng-bg-deep p-2 border border-ng overflow-x-auto whitespace-pre-wrap font-data" style="clip-path: var(--ng-clip-card-sm)">
                 {props.toolCall.result}
               </pre>
             </div>
@@ -334,17 +334,18 @@ export default function MessageItem(props: MessageItemProps) {
 
   return (
     <div
-      class={`group flex gap-3 sm:gap-4 p-3 sm:p-6 ${
-        props.message.role === "assistant" ? "bg-transparent" : "bg-zinc-900/30"
-      } rounded-xl transition-colors hover:bg-zinc-900/40`}
+      class={`group flex gap-3 sm:gap-4 p-3 sm:p-6 border-b border-ng/30 ${
+              props.message.role === "assistant" ? "bg-transparent" : "bg-ng-bg-deep/20"
+            } transition-colors hover:bg-ng-bg-deep/40`}
     >
       <div class="shrink-0 flex flex-col items-center gap-2">
         <div
-          class={`w-8 h-8 rounded-lg flex items-center justify-center shadow-lg ${
-            props.message.role === "assistant"
-              ? "bg-indigo-600 shadow-indigo-900/20"
-              : "bg-zinc-700 shadow-black/20"
-          }`}
+          class={`w-8 h-8 flex items-center justify-center ${
+                      props.message.role === "assistant"
+                        ? "text-black"
+                        : "bg-ng-bg-elevated border border-ng text-ng-secondary"
+                    }`}
+                    style={props.message.role === "assistant" ? "clip-path: var(--ng-clip-card-sm); background: linear-gradient(135deg, var(--ng-cyan-dim), var(--ng-magenta-dim))" : "clip-path: var(--ng-clip-card-sm)"}
         >
           {props.message.role === "assistant" ? (
             <Bot size={18} class="text-white" />
@@ -356,7 +357,7 @@ export default function MessageItem(props: MessageItemProps) {
 
       <div class="flex-1 min-w-0 overflow-hidden space-y-2 sm:space-y-3">
         <div class="flex items-center gap-2 mb-1">
-          <span class="font-bold text-sm text-zinc-300">
+          <span class="font-bold text-sm text-ng-primary font-data tracking-wider">
             {props.message.role === "assistant" ? "Indigo" : "You"}
           </span>
           <span class="text-[10px] sm:text-xs text-zinc-600 font-mono">
@@ -435,11 +436,11 @@ export default function MessageItem(props: MessageItemProps) {
             fallback={
               <div class="flex gap-2.5 items-center py-3 pl-1">
                 <div class="flex gap-1">
-                    <div class="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-                    <div class="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-                    <div class="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce"></div>
+                    <div class="w-1.5 h-1.5 bg-cyan-ng animate-bounce [animation-delay:-0.3s]" style="clip-path: var(--ng-clip-badge)"></div>
+                    <div class="w-1.5 h-1.5 bg-cyan-ng animate-bounce [animation-delay:-0.15s]" style="clip-path: var(--ng-clip-badge)"></div>
+                    <div class="w-1.5 h-1.5 bg-cyan-ng animate-bounce" style="clip-path: var(--ng-clip-badge)"></div>
                 </div>
-                <span class="text-xs font-medium text-indigo-400 uppercase tracking-widest animate-pulse">Thinking</span>
+                <span class="text-xs font-bold text-cyan-ng font-data uppercase tracking-widest animate-pulse">Thinking</span>
               </div>
             }
           >

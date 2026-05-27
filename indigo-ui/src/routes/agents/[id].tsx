@@ -342,7 +342,7 @@ export default function AgentDetail() {
   };
 
   return (
-    <div class="flex h-[calc(100vh-64px)] overflow-hidden bg-black text-zinc-200">
+    <div class="flex h-[calc(100vh-56px)] overflow-hidden text-ng-primary">
       
       {/* Mobile Sidebar Overlay */}
       <Show when={isSidebarOpen()}>
@@ -350,8 +350,8 @@ export default function AgentDetail() {
             class="fixed inset-0 z-40 bg-black/80 backdrop-blur-sm md:hidden"
             onClick={() => setIsSidebarOpen(false)}
         ></div>
-        <div class="fixed inset-y-0 left-0 z-50 w-72 bg-zinc-950 border-r border-zinc-800 shadow-2xl transform transition-transform duration-300 md:hidden flex flex-col">
-            <div class="p-4 flex justify-between items-center border-b border-zinc-800">
+        <div class="fixed inset-y-0 left-0 z-50 w-72 bg-ng-bg-deep border-r border-ng shadow-2xl transform transition-transform duration-300 md:hidden flex flex-col">
+            <div class="p-3 flex justify-between items-center border-b border-ng">
                 <span class="font-bold text-white">Conversations</span>
                 <button onClick={() => setIsSidebarOpen(false)} class="text-zinc-400 hover:text-white">
                     <X size={20} />
@@ -384,8 +384,8 @@ export default function AgentDetail() {
         />
       </div>
 
-      <div class="flex-1 flex flex-col min-w-0 bg-zinc-950">
-        <header class="h-14 border-b border-zinc-800 flex items-center gap-3 justify-between px-4 sm:px-6 bg-zinc-950/80 backdrop-blur z-20">
+      <div class="flex-1 flex flex-col min-w-0 bg-ng-bg-deep">
+        <header class="h-12 border-b border-ng flex items-center gap-3 justify-between px-4 sm:px-6 bg-ng-bg-deep/80 backdrop-blur z-20">
           <div class="flex items-center gap-4">
              {/* Mobile Sidebar Toggle */}
             <button
@@ -395,29 +395,23 @@ export default function AgentDetail() {
               <Menu size={20} />
             </button>
 
-            <span class="font-semibold text-white text-lg tracking-tight truncate max-w-[150px] sm:max-w-xs">
+            <span class="font-bold text-white text-base tracking-wider font-data truncate max-w-[150px] sm:max-w-xs">
               {data.latest?.agent.name || "Loading..."}
             </span>
-            <div class="hidden sm:block h-4 w-px bg-zinc-800"></div>
-            <div class="hidden sm:flex items-center gap-2 text-xs font-mono">
-              <Cpu size={14} class="text-zinc-500" />
-              <span class="text-zinc-400">{data.latest?.agent.model}</span>
+            <div class="hidden sm:block h-4 w-px bg-ng-border"></div>
+            <div class="hidden sm:flex items-center gap-2 text-xs font-data">
+                          <Cpu size={14} class="text-ng-muted" />
+                          <span class="text-cyan-ng">{data.latest?.agent.model}</span>
             </div>
             <Show when={data.latest?.agent}>
               <span
-                class={`hidden sm:flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider px-2 py-0.5 rounded border ${
-                  data.latest?.agent.status === "Online"
-                    ? "bg-green-500/10 text-green-400 border-green-500/20"
-                    : "bg-red-500/10 text-red-400 border-red-500/20"
-                }`}
+                class={`status-badge hidden sm:flex ${
+                                  data.latest?.agent.status === "Online"
+                                    ? "status-online"
+                                    : "status-offline"
+                                }`}
               >
-                <div
-                  class={`w-1.5 h-1.5 rounded-full ${
-                    data.latest?.agent.status === "Online"
-                      ? "bg-green-400 animate-pulse"
-                      : "bg-red-400"
-                  }`}
-                ></div>
+
                 {data.latest?.agent.status}
               </span>
             </Show>
@@ -434,11 +428,12 @@ export default function AgentDetail() {
               onClick={() =>
                 setActiveTab(activeTab() === "chat" ? "settings" : "chat")
               }
-              class={`p-2 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium ${
-                activeTab() === "settings"
-                  ? "bg-indigo-600 text-white"
-                  : "text-zinc-400 hover:text-white hover:bg-zinc-800"
-              }`}
+              class={`p-2 transition-colors flex items-center gap-2 text-xs font-bold uppercase tracking-wider font-data ${
+                              activeTab() === "settings"
+                                ? "text-cyan-ng border border-cyan-ng/30"
+                                : "text-ng-muted hover:text-ng-primary hover:border-ng-border-hover border border-transparent"
+                            }`}
+                            style={activeTab() === "settings" ? "clip-path: var(--ng-clip-card-sm)" : ""}
             >
               <Settings size={18} />
               <span class="hidden md:inline">Configure</span>
@@ -449,7 +444,7 @@ export default function AgentDetail() {
         <Show when={activeTab() === "chat"}>
           <div class="flex-1 flex flex-col min-h-0 relative">
             <Show when={data.latest?.agent.status !== "Online" && !loading()}>
-              <div class="bg-red-900/20 border-b border-red-900/30 p-3 flex items-center justify-center gap-3 text-red-200 text-sm">
+              <div class="bg-[--ng-offline-glow] border-b border-offline/20 p-3 flex items-center justify-center gap-3 text-offline text-xs font-data">
                 <TriangleAlert size={16} />
                 <span class="hidden sm:inline">This agent's model is currently offline.</span>
                 <span class="sm:hidden">Model offline.</span>
@@ -466,18 +461,18 @@ export default function AgentDetail() {
               ref={scrollContainer}
               class="flex-1 overflow-y-auto custom-scrollbar"
             >
-              <div class="max-w-3xl flex flex-col gap-1 mx-auto w-full pb-24 sm:pb-32 pt-4 sm:pt-8 px-2 sm:px-4">
+              <div class="max-w-3xl flex flex-col mx-auto w-full pb-24 sm:pb-32 pt-4 sm:pt-8 px-2 sm:px-4">
                 <Show when={currentConversation()?.messages.length === 0}>
                   <div class="flex flex-col items-center justify-center mt-20 text-zinc-500">
-                    <div class="w-16 h-16 bg-zinc-900 rounded-2xl flex items-center justify-center mb-6 border border-zinc-800 shadow-xl">
+                    <div class="w-14 h-14 bg-ng-bg-surface flex items-center justify-center mb-5 border border-ng shadow-xl" style="clip-path: var(--ng-clip-card)">
                       <EllipsisVertical size={32} class="opacity-50" />
                     </div>
-                    <h3 class="text-xl font-medium text-white mb-2">
-                      Ready to Interact
-                    </h3>
+                    <h3 class="text-lg font-bold text-white font-data tracking-wider mb-2">
+                                          Ready to Interact
+                                        </h3>
                     <p class="max-w-md text-center text-sm text-zinc-400 leading-relaxed">
                       Ask{" "}
-                      <span class="text-indigo-400 font-medium">
+                      <span class="text-cyan-ng font-bold">
                         {data.latest?.agent.name}
                       </span>{" "}
                       anything.
@@ -502,7 +497,7 @@ export default function AgentDetail() {
               </div>
             </div>
 
-            <div class="absolute bottom-0 left-0 w-full bg-linear-to-t from-zinc-950 via-zinc-950/90 to-transparent pt-12 pb-4 px-2 sm:px-4">
+            <div class="absolute bottom-0 left-0 w-full pt-12 pb-2 px-2 sm:px-4" style="background: linear-gradient(to top, var(--ng-bg-deep) 60%, transparent)">
               <InputArea
                 onSend={handleSendMessage}
                 loading={loading()}
@@ -525,15 +520,15 @@ export default function AgentDetail() {
           <div class="flex-1 overflow-y-auto p-6 md:p-12">
             <div class="max-w-2xl mx-auto space-y-8">
               <div class="space-y-2">
-                <h2 class="text-xl font-bold text-white">Agent Settings</h2>
-                <p class="text-zinc-400 text-sm">
+                <h2 class="text-lg font-bold text-white font-data tracking-wider">Agent Settings</h2>
+                <p class="text-ng-secondary text-sm">
                   Configure how {data.latest?.agent.name} behaves.
                 </p>
               </div>
 
               <div class="space-y-4">
                 <div class="space-y-2">
-                  <label class="text-sm font-medium text-zinc-300">Name</label>
+                  <label class="label">Name</label>
                   <input
                     type="text"
                     class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-4 py-2 focus:border-indigo-500 focus:outline-none"
@@ -548,7 +543,7 @@ export default function AgentDetail() {
                 </div>
 
                 <div class="space-y-2">
-                  <label class="text-sm font-medium text-zinc-300">Model</label>
+                  <label class="label">Model</label>
                   <select
                     class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-4 py-2 focus:border-indigo-500 focus:outline-none"
                     value={editForm().model || ""}
@@ -579,11 +574,9 @@ export default function AgentDetail() {
                 </div>
 
                 <div class="space-y-2">
-                  <label class="text-sm font-medium text-zinc-300">
-                    System Prompt
-                  </label>
+                  <label class="label">System Directive</label>
                   <textarea
-                    class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-4 py-2 focus:border-indigo-500 focus:outline-none min-h-50 font-mono text-sm"
+                    class="input-field font-data text-sm min-h-[200px] resize-none"
                     value={editForm().system_prompt || ""}
                     onInput={(e) =>
                       setEditForm({
@@ -595,16 +588,16 @@ export default function AgentDetail() {
                 </div>
               </div>
 
-              <div class="flex items-center justify-between pt-8 border-t border-zinc-800">
+              <div class="flex items-center justify-between pt-6 border-t border-ng">
                 <button
                   onClick={deleteAgent}
-                  class="px-4 py-2 text-red-400 hover:bg-red-950/30 rounded transition-colors text-sm"
+                  class="btn-danger font-data text-xs uppercase tracking-wider"
                 >
                   Delete Agent
                 </button>
                 <button
                   onClick={updateAgent}
-                  class="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-medium transition-colors"
+                  class="btn-primary font-data text-xs uppercase tracking-wider"
                 >
                   Save Changes
                 </button>

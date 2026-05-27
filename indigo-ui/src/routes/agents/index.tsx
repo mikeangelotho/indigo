@@ -20,7 +20,6 @@ const fetchData = async (hubUrl: string) => {
   const agents = await agentsRes.json();
   const nodes = await nodesRes.json();
 
-  // Extract unique model names from active nodes
   const availableModels = [
     ...new Set(nodes.map((n: any) => n.model_name).filter(Boolean)),
   ];
@@ -36,54 +35,25 @@ const getModelTags = (model: string) => {
   const lower = model.toLowerCase();
 
   if (lower.includes("instruct") || lower.includes("chat"))
-    tags.push({
-      label: "Instruct",
-      color: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-    });
-  if (
-    lower.includes("code") ||
-    lower.includes("coder") ||
-    lower.includes("deepseek")
-  )
-    tags.push({
-      label: "Coding",
-      color: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
-    });
-  if (
-    lower.includes("vision") ||
-    lower.includes("llava") ||
-    lower.includes("omni")
-  )
-    tags.push({
-      label: "Vision",
-      color: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-    });
+    tags.push({ label: "Instruct", color: "bg-blue-500/20 text-blue-400 border-blue-500/30" });
+  if (lower.includes("code") || lower.includes("coder") || lower.includes("deepseek"))
+    tags.push({ label: "Coding", color: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" });
+  if (lower.includes("vision") || lower.includes("llava") || lower.includes("omni"))
+    tags.push({ label: "Vision", color: "bg-purple-500/20 text-purple-400 border-purple-500/30" });
   if (lower.includes("math"))
-    tags.push({
-      label: "Math",
-      color: "bg-amber-500/20 text-amber-400 border-amber-500/30",
-    });
+    tags.push({ label: "Math", color: "bg-amber-500/20 text-amber-400 border-amber-500/30" });
   if (lower.includes("q4") || lower.includes("q5") || lower.includes("q8"))
-    tags.push({
-      label: "Quantized",
-      color: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30",
-    });
+    tags.push({ label: "Quantized", color: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30" });
 
   if (tags.length === 0)
-    tags.push({
-      label: "General",
-      color: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30",
-    });
+    tags.push({ label: "General", color: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30" });
 
   return tags;
 };
 
 export default function AgentsDashboard() {
   const navigate = useNavigate();
-  const [data, { refetch }] = createResource(
-    () => settingsStore.activeHub,
-    fetchData
-  );
+  const [data, { refetch }] = createResource(() => settingsStore.activeHub, fetchData);
   const [isCreating, setIsCreating] = createSignal(false);
   const [newAgent, setNewAgent] = createSignal({
     name: "",
@@ -113,43 +83,41 @@ export default function AgentsDashboard() {
   };
 
   return (
-    <main class="max-w-7xl mx-auto p-6 space-y-8">
-      <div class="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-zinc-800 pb-6">
+    <main class="max-w-7xl mx-auto p-6 space-y-6">
+      <div class="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-ng pb-4">
         <div>
-          <h1 class="text-3xl font-bold tracking-tight text-white flex items-center gap-3">
-            <Zap class="text-indigo-500" /> Agent Swarm
+          <h1 class="text-2xl font-bold tracking-tight text-white font-data flex items-center gap-3">
+            <Zap class="text-cyan-ng" size={22} /> Agent Swarm
           </h1>
-          <p class="text-zinc-400 mt-2">
+          <p class="text-ng-secondary text-sm mt-1">
             Deploy and orchestrate specialized autonomous personas.
           </p>
         </div>
-        <div class="flex items-center gap-4 text-sm text-zinc-500 font-mono">
-          <span>NETWORK STATUS:</span>
-          <span class="flex items-center gap-2 text-green-400">
-            <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-            ONLINE
+        <div class="flex items-center gap-3 text-[10px] font-data uppercase tracking-widest text-ng-muted">
+          <span>Network Status:</span>
+          <span class="flex items-center gap-2 text-online font-bold">
+            <span class="w-1.5 h-1.5 bg-online animate-pulse" style="clip-path: var(--ng-clip-badge)"></span>
+            Online
           </span>
         </div>
       </div>
 
-      <div class="grid grid-cols-1 xl:grid-cols-4 gap-8 items-start">
+      <div class="grid grid-cols-1 xl:grid-cols-4 gap-6 items-start">
         {/* Create Agent Panel */}
         <div class="xl:col-span-1">
-          <div class="bg-zinc-900/50 backdrop-blur border border-zinc-800 rounded-xl p-6 sticky top-6 shadow-xl shadow-black/50">
-            <div class="flex items-center gap-2 mb-6 text-indigo-400">
-              <Plus size={20} />
-              <h2 class="text-lg font-semibold text-white">Deploy Agent</h2>
+          <div class="ng-card p-5 sticky top-6">
+            <div class="flex items-center gap-2 mb-5 text-cyan-ng">
+              <Plus size={16} />
+              <h2 class="text-sm font-bold text-white font-data uppercase tracking-widest">Deploy Agent</h2>
             </div>
 
-            <form onSubmit={createAgent} class="space-y-5">
-              <div class="space-y-1.5">
-                <label class="text-xs font-mono uppercase text-zinc-500">
-                  Designation
-                </label>
+            <form onSubmit={createAgent} class="space-y-4">
+              <div class="space-y-1">
+                <label class="label">Designation</label>
                 <input
                   type="text"
                   required
-                  class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5 text-white placeholder:text-zinc-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50 outline-none transition-all"
+                  class="input-field font-data text-sm"
                   value={newAgent().name}
                   onInput={(e) =>
                     setNewAgent({ ...newAgent(), name: e.currentTarget.value })
@@ -158,13 +126,11 @@ export default function AgentsDashboard() {
                 />
               </div>
 
-              <div class="space-y-1.5">
-                <label class="text-xs font-mono uppercase text-zinc-500">
-                  Inference Model
-                </label>
+              <div class="space-y-1">
+                <label class="label">Inference Model</label>
                 <div class="relative">
                   <select
-                    class="w-full appearance-none bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5 text-white focus:border-indigo-500 outline-none transition-all"
+                    class="input-field appearance-none pr-8"
                     required
                     value={newAgent().model}
                     onChange={(e) =>
@@ -179,30 +145,26 @@ export default function AgentsDashboard() {
                     </option>
                     <For each={data()?.availableModels}>
                       {(model) => (
-                        <option value={model as string}>
-                          {model as string}
-                        </option>
+                        <option value={model as string}>{model as string}</option>
                       )}
                     </For>
                   </select>
-                  <div class="absolute right-3 top-3 pointer-events-none text-zinc-500">
-                    <Box size={16} />
+                  <div class="absolute right-3 top-2.5 pointer-events-none text-ng-muted">
+                    <Box size={14} />
                   </div>
                 </div>
                 <Show when={data()?.availableModels.length === 0}>
-                  <div class="flex items-center gap-2 text-amber-500 bg-amber-950/20 p-3 rounded-lg border border-amber-900/30">
-                    <AlertCircle size={16} />
-                    <p class="text-xs">No active nodes detected.</p>
+                  <div class="flex items-center gap-2 text-warning bg-warning/5 p-2.5 border border-warning/20" style="clip-path: var(--ng-clip-card-sm)">
+                    <AlertCircle size={14} />
+                    <p class="text-xs font-data">No active nodes detected.</p>
                   </div>
                 </Show>
               </div>
 
-              <div class="space-y-1.5">
-                <label class="text-xs font-mono uppercase text-zinc-500">
-                  System Directive
-                </label>
+              <div class="space-y-1">
+                <label class="label">System Directive</label>
                 <textarea
-                  class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5 text-white placeholder:text-zinc-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50 outline-none min-h-30 resize-none text-sm leading-relaxed"
+                  class="input-field min-h-[120px] resize-none text-sm leading-relaxed"
                   value={newAgent().system_prompt}
                   onInput={(e) =>
                     setNewAgent({
@@ -216,17 +178,11 @@ export default function AgentsDashboard() {
               <button
                 type="submit"
                 disabled={isCreating() || data()?.availableModels.length === 0}
-                class="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-3 rounded-lg shadow-lg shadow-indigo-900/20 transition-all flex items-center justify-center gap-2 group"
+                class="btn-primary w-full flex items-center justify-center gap-2 group py-3"
               >
-                <Show
-                  when={!isCreating()}
-                  fallback={<span>Initializing...</span>}
-                >
-                  <Zap
-                    size={18}
-                    class="group-hover:text-yellow-300 transition-colors"
-                  />
-                  Deploy Agent
+                <Show when={!isCreating()} fallback={<span class="font-data text-xs uppercase tracking-wider">Initializing...</span>}>
+                  <Zap size={16} class="group-hover:text-yellow-300 transition-colors" />
+                  <span class="font-data text-xs uppercase tracking-wider">Deploy Agent</span>
                 </Show>
               </button>
             </form>
@@ -236,74 +192,53 @@ export default function AgentsDashboard() {
         {/* Agent Grid */}
         <div class="xl:col-span-3">
           <Show when={data.loading}>
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-pulse">
-              <div class="h-48 bg-zinc-900/50 rounded-xl border border-zinc-800"></div>
-              <div class="h-48 bg-zinc-900/50 rounded-xl border border-zinc-800"></div>
-              <div class="h-48 bg-zinc-900/50 rounded-xl border border-zinc-800"></div>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 animate-pulse">
+              <div class="h-44 bg-ng-bg-surface/50 border border-ng" style="clip-path: var(--ng-clip-card)"></div>
+              <div class="h-44 bg-ng-bg-surface/50 border border-ng" style="clip-path: var(--ng-clip-card)"></div>
+              <div class="h-44 bg-ng-bg-surface/50 border border-ng" style="clip-path: var(--ng-clip-card)"></div>
             </div>
           </Show>
 
-          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <For each={data()?.agents}>
               {(agent) => (
                 <A
                   href={`/agents/${agent.id}`}
-                  class="group relative bg-zinc-900 border border-zinc-800 hover:border-indigo-500/50 rounded-xl p-5 transition-all hover:shadow-xl hover:shadow-indigo-500/5 hover:-translate-y-1 overflow-hidden"
+                  class="ng-card p-4 group cursor-pointer"
                 >
-                  {/* Decoration */}
-                  <div class="absolute -right-10 -top-10 w-32 h-32 bg-linear-to-br from-indigo-500/10 to-transparent rounded-full blur-2xl group-hover:from-indigo-500/20 transition-all"></div>
-
-                  <div class="relative z-10 flex flex-col h-full">
-                    <div class="flex justify-between items-start mb-4">
-                      <div class="p-3 bg-zinc-950 rounded-lg border border-zinc-800 group-hover:border-indigo-500/30 transition-colors">
-                        <Terminal
-                          size={24}
-                          class="text-zinc-400 group-hover:text-indigo-400 transition-colors"
-                        />
+                  <div class="flex flex-col h-full">
+                    <div class="flex justify-between items-start mb-3">
+                      <div class="p-2 bg-ng-bg-deep border border-ng group-hover:border-cyan-ng/30 transition-colors" style="clip-path: var(--ng-clip-card-sm)">
+                        <Terminal size={20} class="text-ng-secondary group-hover:text-cyan-ng transition-colors" />
                       </div>
-                      <div
-                        class={`flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider px-2 py-1 rounded-full border ${
-                          agent.status === "Online"
-                            ? "bg-green-500/10 text-green-400 border-green-500/20"
-                            : "bg-red-500/10 text-red-400 border-red-500/20"
-                        }`}
-                      >
-                        <div
-                          class={`w-1.5 h-1.5 rounded-full ${
-                            agent.status === "Online"
-                              ? "bg-green-400 animate-pulse"
-                              : "bg-red-400"
-                          }`}
-                        ></div>
+                      <span class={`status-badge ${agent.status === "Online" ? "status-online" : "status-offline"}`}>
                         {agent.status}
-                      </div>
+                      </span>
                     </div>
 
-                    <h3 class="text-lg font-bold text-white mb-1 group-hover:text-indigo-300 transition-colors">
+                    <h3 class="text-base font-bold text-white mb-1 font-data tracking-wider group-hover:text-cyan-ng transition-colors">
                       {agent.name}
                     </h3>
-                    <div class="flex items-center gap-2 text-xs text-zinc-500 font-mono mb-2">
-                      <Cpu size={12} />
-                      <span class="truncate max-w-45">{agent.model}</span>
+                    <div class="flex items-center gap-2 text-[10px] text-ng-muted font-data mb-2">
+                      <Cpu size={11} />
+                      <span class="truncate max-w-40">{agent.model}</span>
                     </div>
 
-                    <div class="flex flex-wrap gap-1.5 mb-4">
+                    <div class="flex flex-wrap gap-1 mb-3">
                       <For each={getModelTags(agent.model)}>
                         {(tag) => (
-                          <span
-                            class={`text-[9px] font-mono px-1.5 py-0.5 rounded border ${tag.color}`}
-                          >
+                          <span class={`text-[8px] font-data px-1.5 py-0.5 border ${tag.color}`} style="clip-path: var(--ng-clip-badge)">
                             {tag.label}
                           </span>
                         )}
                       </For>
                     </div>
 
-                    <p class="text-sm text-zinc-400 line-clamp-2 leading-relaxed mb-4 flex-1">
+                    <p class="text-xs text-ng-secondary line-clamp-2 leading-relaxed mb-3 flex-1">
                       {agent.system_prompt}
                     </p>
 
-                    <div class="pt-4 border-t border-zinc-800/50 flex items-center text-xs text-zinc-500">
+                    <div class="pt-3 border-t border-ng flex items-center text-[10px] text-ng-muted font-data">
                       <span>ID: {agent.id.slice(0, 8)}...</span>
                     </div>
                   </div>
@@ -313,16 +248,15 @@ export default function AgentsDashboard() {
           </div>
 
           <Show when={!data.loading && data()?.agents.length === 0}>
-            <div class="flex flex-col items-center justify-center py-20 border-2 border-dashed border-zinc-800 rounded-xl bg-zinc-900/30">
-              <div class="w-16 h-16 bg-zinc-900 rounded-full flex items-center justify-center mb-4 text-zinc-500">
-                <Terminal size={32} />
+            <div class="flex flex-col items-center justify-center py-20 border border-ng bg-ng-bg-deep/30" style="clip-path: var(--ng-clip-card)">
+              <div class="w-14 h-14 bg-ng-bg-surface border border-ng flex items-center justify-center mb-4 text-ng-muted" style="clip-path: var(--ng-clip-card-sm)">
+                <Terminal size={28} />
               </div>
-              <h3 class="text-xl font-medium text-white mb-2">
+              <h3 class="text-lg font-bold text-white font-data tracking-wider mb-2">
                 No Agents Deployed
               </h3>
-              <p class="text-zinc-400 max-w-sm text-center">
-                Create your first AI agent to start distributed inference tasks
-                on the network.
+              <p class="text-ng-secondary text-sm max-w-sm text-center">
+                Create your first AI agent to start distributed inference tasks on the network.
               </p>
             </div>
           </Show>

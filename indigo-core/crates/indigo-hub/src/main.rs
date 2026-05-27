@@ -33,10 +33,10 @@ use prost::Message as ProstMessage; // Import Prost trait
 use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::Duration;
-use std::time::Instant;
 use tokio_stream::Stream;
 use tonic::{transport::Server, Request, Response, Status};
 use tower_http::cors::{Any, CorsLayer};
@@ -44,6 +44,7 @@ use tower_http::cors::{Any, CorsLayer};
 use serde::{Deserialize, Serialize};
 
 mod tool_executor;
+mod tool_plugin;
 mod tool_registry;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -85,11 +86,11 @@ impl AppState {
                 return None;
             }
         };
-        
+
         if nodes.is_empty() {
             return None;
         }
-        
+
         let mut next_idx = match self.next_node.write() {
             Ok(guard) => guard,
             Err(e) => {
@@ -97,7 +98,7 @@ impl AppState {
                 return None;
             }
         };
-        
+
         // Filter only Online nodes
         let active_nodes: Vec<String> = nodes
             .values()
@@ -122,7 +123,7 @@ impl AppState {
                 return None;
             }
         };
-        
+
         if nodes.is_empty() {
             return None;
         }
@@ -184,21 +185,25 @@ impl InferenceService for HubGrpcService {
 
         // Find tool in registry
         let tool_def = {
-             let registry = match self.state.tool_registry.read() {
-                 Ok(guard) => guard,
-                 Err(e) => {
-                     eprintln!("Failed to read tool registry: {}", e);
-                     return Err(Status::internal("Failed to access tool registry"));
-                 }
-             };
-             registry.list_tools().into_iter().find(|t| t.name == tool_name).cloned()
+            let registry = match self.state.tool_registry.read() {
+                Ok(guard) => guard,
+                Err(e) => {
+                    eprintln!("Failed to read tool registry: {}", e);
+                    return Err(Status::internal("Failed to access tool registry"));
+                }
+            };
+            registry
+                .list_tools()
+                .into_iter()
+                .find(|t| t.name == tool_name)
+                .cloned()
         };
-        
+
         if let Some(tool) = tool_def {
             let args: serde_json::Value = serde_json::from_str(&args_json)
                 .map_err(|e| Status::invalid_argument(format!("Invalid JSON args: {}", e)))?;
-                
-            let mut executor = self.state.tool_executor.write().await;
+
+            let executor = self.state.tool_executor.write().await;
             match executor.execute_tool(&tool, &args).await {
                 Ok(res) => Ok(Response::new(ToolExecutionResponse {
                     result: res,
@@ -212,7 +217,10 @@ impl InferenceService for HubGrpcService {
                 })),
             }
         } else {
-            Err(Status::not_found(format!("Tool '{}' not found in registry", tool_name)))
+            Err(Status::not_found(format!(
+                "Tool '{}' not found in registry",
+                tool_name
+            )))
         }
     }
 
@@ -221,16 +229,20 @@ impl InferenceService for HubGrpcService {
         _request: Request<NodeToolsRequest>,
     ) -> Result<Response<NodeToolsResponse>, Status> {
         let tools = {
-             let registry = match self.state.tool_registry.read() {
-                 Ok(guard) => guard,
-                 Err(e) => {
-                     eprintln!("Failed to read tool registry: {}", e);
-                     return Err(Status::internal("Failed to access tool registry"));
-                 }
-             };
-             registry.list_tools().into_iter().map(convert_common_tool_to_protobuf).collect()
+            let registry = match self.state.tool_registry.read() {
+                Ok(guard) => guard,
+                Err(e) => {
+                    eprintln!("Failed to read tool registry: {}", e);
+                    return Err(Status::internal("Failed to access tool registry"));
+                }
+            };
+            registry
+                .list_tools()
+                .into_iter()
+                .map(convert_common_tool_to_protobuf)
+                .collect()
         };
-        
+
         Ok(Response::new(NodeToolsResponse {
             tools,
             node_id: "indigo-hub".to_string(),
@@ -428,19 +440,26 @@ impl InferenceService for HubGrpcService {
         request: Request<GrpcInferenceRequest>,
     ) -> Result<Response<Self::RunInferenceStream>, Status> {
         let req = request.into_inner();
-        
+
         // 1. Pick a node
-        let node_address = self.state.get_next_node()
-             .ok_or_else(|| Status::unavailable("No nodes available"))?;
+        let node_address = self
+            .state
+            .get_next_node()
+            .ok_or_else(|| Status::unavailable("No nodes available"))?;
 
         if node_address == "stdio://local" || !req.image_data.is_empty() {
-             return Err(Status::unimplemented("Sidecar/Image proxying via gRPC not fully supported yet. Use HTTP/WS API."));
+            return Err(Status::unimplemented(
+                "Sidecar/Image proxying via gRPC not fully supported yet. Use HTTP/WS API.",
+            ));
         }
 
-        let mut client = InferenceServiceClient::connect(node_address).await
+        let mut client = InferenceServiceClient::connect(node_address)
+            .await
             .map_err(|e| Status::internal(format!("Failed to connect to node: {}", e)))?;
 
-        let response = client.run_inference(tonic::Request::new(req)).await
+        let response = client
+            .run_inference(tonic::Request::new(req))
+            .await
             .map_err(|e| Status::internal(format!("Node inference failed: {}", e)))?;
 
         let stream = response.into_inner();
@@ -590,7 +609,7 @@ impl InferenceService for HubGrpcService {
         let arguments_json = req.arguments_json.clone();
 
         let result = {
-            let mut executor = self.state.tool_executor.write().await;
+            let executor = self.state.tool_executor.write().await;
             executor
                 .execute_mcp_tool_direct(&server_name, &tool_name, &arguments_json)
                 .await
@@ -1224,12 +1243,12 @@ impl TokenBuffer {
             token_count: 0,
         }
     }
-    
+
     fn add_token(&mut self, token: &str) {
         self.content.push_str(token);
         self.token_count += 1;
     }
-    
+
     fn should_flush(&self, force: bool) -> bool {
         force ||
         // Immediate flush for first token to eliminate "thinking" delay
@@ -1242,8 +1261,8 @@ impl TokenBuffer {
 
     fn get_adaptive_threshold(&self) -> usize {
         match self.token_count {
-            1..=5 => 5,   // Very small chunks at start for immediate response
-            6..=15 => 15, // Small chunks for natural typing feel
+            1..=5 => 5,    // Very small chunks at start for immediate response
+            6..=15 => 15,  // Small chunks for natural typing feel
             16..=50 => 30, // Medium chunks for steady flow
             _ => 50,       // Larger chunks for established streaming
         }
@@ -1251,13 +1270,13 @@ impl TokenBuffer {
 
     fn get_adaptive_delay(&self) -> Duration {
         match self.token_count {
-            1..=3 => Duration::from_millis(50),   // Quick initial response
-            4..=10 => Duration::from_millis(80),  // Natural typing pace
+            1..=3 => Duration::from_millis(50),    // Quick initial response
+            4..=10 => Duration::from_millis(80),   // Natural typing pace
             11..=30 => Duration::from_millis(120), // Comfortable reading speed
             _ => Duration::from_millis(150),       // Steady streaming
         }
     }
-    
+
     fn flush(&mut self) -> String {
         let result = self.content.clone();
         self.content.clear();
@@ -1267,7 +1286,7 @@ impl TokenBuffer {
         }
         result
     }
-    
+
     fn is_empty(&self) -> bool {
         self.content.is_empty()
     }
@@ -1281,7 +1300,7 @@ struct Cli {
     /// Start the Hub with a local inference sidecar enabled
     #[arg(long)]
     with_sidecar: bool,
-    
+
     /// Configure GPU layers for sidecar (default: 999)
     #[arg(long, default_value = "999")]
     sidecar_gpu_layers: u32,
@@ -1456,12 +1475,14 @@ async fn main() {
             return;
         }
     };
-    
+
     println!(
         "Indigo Hub HTTP listening on {}",
-        listener.local_addr().map_or_else(|_| "unknown".to_string(), |addr| addr.to_string())
+        listener
+            .local_addr()
+            .map_or_else(|_| "unknown".to_string(), |addr| addr.to_string())
     );
-    
+
     if let Err(e) = axum::serve(listener, app).await {
         eprintln!("HTTP server error: {}", e);
     }
@@ -1514,7 +1535,10 @@ async fn delete_node(Path(id): Path<String>, State(state): State<AppState>) -> i
         Ok(guard) => guard,
         Err(e) => {
             eprintln!("Failed to write nodes lock for deletion: {}", e);
-            return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Failed to access node registry"));
+            return Err((
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to access node registry",
+            ));
         }
     };
 
@@ -1524,7 +1548,10 @@ async fn delete_node(Path(id): Path<String>, State(state): State<AppState>) -> i
             Ok(guard) => guard,
             Err(e) => {
                 eprintln!("Failed to write spawned processes lock: {}", e);
-                return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Failed to access process registry"));
+                return Err((
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to access process registry",
+                ));
             }
         };
         if let Some(pid) = spawned.remove(&id) {
@@ -1726,7 +1753,10 @@ async fn create_agent(
     Ok(Json(agent))
 }
 
-async fn get_agent(Path(id): Path<String>, State(state): State<AppState>) -> Result<Json<AgentConfig>, StatusCode> {
+async fn get_agent(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Json<AgentConfig>, StatusCode> {
     let agents = match state.agents.read() {
         Ok(guard) => guard,
         Err(e) => {
@@ -1734,7 +1764,7 @@ async fn get_agent(Path(id): Path<String>, State(state): State<AppState>) -> Res
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
-    
+
     match agents.get(&id) {
         Some(agent) => Ok(Json(agent.clone())),
         None => Err(StatusCode::NOT_FOUND),
@@ -1742,7 +1772,7 @@ async fn get_agent(Path(id): Path<String>, State(state): State<AppState>) -> Res
 }
 
 async fn update_agent(
-    Path(id): Path<String>, 
+    Path(id): Path<String>,
     State(state): State<AppState>,
     Json(payload): Json<CreateAgentPayload>,
 ) -> Result<Json<AgentConfig>, StatusCode> {
@@ -1776,9 +1806,9 @@ async fn update_agent(
         } else {
             "Offline".into()
         };
-        
+
         let updated_agent = agent.clone();
-        
+
         // Release the lock before saving
         drop(agents);
         {
@@ -1791,19 +1821,25 @@ async fn update_agent(
             };
             save_agents(&agents_for_save);
         }
-        
+
         Ok(Json(updated_agent))
     } else {
         Err(StatusCode::NOT_FOUND)
     }
 }
 
-async fn delete_agent_http(Path(id): Path<String>, State(state): State<AppState>) -> impl IntoResponse {
+async fn delete_agent_http(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
     let mut agents = match state.agents.write() {
         Ok(guard) => guard,
         Err(e) => {
             eprintln!("Failed to write agents lock for deletion: {}", e);
-            return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Failed to access agent registry"));
+            return Err((
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to access agent registry",
+            ));
         }
     };
     if agents.remove(&id).is_some() {
@@ -1908,18 +1944,30 @@ async fn list_tools_http(
             return Json(Vec::new());
         }
     };
-    
+
     let all_tools = registry.list_tools();
-    
+
     // Filter by context if specified
     let filtered_tools = if let Some(context) = params.get("context") {
         match context.as_str() {
-            "web" => all_tools.into_iter()
-                .filter(|t| matches!(t.context, indigo_common::ToolContext::WebChat | indigo_common::ToolContext::Both))
+            "web" => all_tools
+                .into_iter()
+                .filter(|t| {
+                    matches!(
+                        t.context,
+                        indigo_common::ToolContext::WebChat | indigo_common::ToolContext::Both
+                    )
+                })
                 .cloned()
                 .collect(),
-            "cli" => all_tools.into_iter()
-                .filter(|t| matches!(t.context, indigo_common::ToolContext::CliInterface | indigo_common::ToolContext::Both))
+            "cli" => all_tools
+                .into_iter()
+                .filter(|t| {
+                    matches!(
+                        t.context,
+                        indigo_common::ToolContext::CliInterface | indigo_common::ToolContext::Both
+                    )
+                })
                 .cloned()
                 .collect(),
             _ => all_tools.into_iter().cloned().collect(),
@@ -1927,7 +1975,7 @@ async fn list_tools_http(
     } else {
         all_tools.into_iter().cloned().collect()
     };
-    
+
     Json(filtered_tools)
 }
 
@@ -1946,9 +1994,8 @@ async fn register_tool_http(
             });
         }
     };
-    
-    match registry.register_tool(tool.clone())
-    {
+
+    match registry.register_tool(tool.clone()) {
         Ok(()) => Json(CommonToolRegistryResponse {
             success: true,
             message: "Tool registered successfully".to_string(),
@@ -1978,9 +2025,8 @@ async fn update_tool_http(
             });
         }
     };
-    
-    match registry.update_tool(&tool_id, tool.clone())
-    {
+
+    match registry.update_tool(&tool_id, tool.clone()) {
         Ok(()) => Json(CommonToolRegistryResponse {
             success: true,
             message: "Tool updated successfully".to_string(),
@@ -2001,7 +2047,10 @@ async fn unregister_tool_http(
     let mut registry = match state.tool_registry.write() {
         Ok(guard) => guard,
         Err(e) => {
-            eprintln!("Failed to write tool registry lock for unregistration: {}", e);
+            eprintln!(
+                "Failed to write tool registry lock for unregistration: {}",
+                e
+            );
             return Json(CommonToolRegistryResponse {
                 success: false,
                 message: "Failed to access tool registry".to_string(),
@@ -2009,9 +2058,8 @@ async fn unregister_tool_http(
             });
         }
     };
-    
-    match registry.unregister_tool(&tool_id)
-    {
+
+    match registry.unregister_tool(&tool_id) {
         Ok(()) => Json(CommonToolRegistryResponse {
             success: true,
             message: "Tool unregistered successfully".to_string(),
@@ -2135,15 +2183,15 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                 }
 
-if let Some(agent_id) = &req.agent_id {
+                if let Some(agent_id) = &req.agent_id {
                     let agent_info = {
                         let agents = state_clone.agents.read().unwrap();
                         agents
                             .get(agent_id)
                             .map(|a| (a.name.clone(), a.system_prompt.clone(), a.model.clone()))
                     };
-                    
-if let Some((name, prompt, _model)) = agent_info {
+
+                    if let Some((name, prompt, _model)) = agent_info {
                         println!("Using agent: {}", name);
 
                         let mut final_prompt = prompt;
@@ -2155,16 +2203,28 @@ if let Some((name, prompt, _model)) = agent_info {
                             // Filter tools based on request context
                             let registry = state_clone.tool_registry.read().unwrap();
                             let all_tools = registry.list_tools();
-                            
+
                             match req.context.as_deref().unwrap_or("cli") {
                                 "web" => all_tools
                                     .into_iter()
-                                    .filter(|t| matches!(t.context, indigo_common::ToolContext::WebChat | indigo_common::ToolContext::Both))
+                                    .filter(|t| {
+                                        matches!(
+                                            t.context,
+                                            indigo_common::ToolContext::WebChat
+                                                | indigo_common::ToolContext::Both
+                                        )
+                                    })
                                     .cloned()
                                     .collect(),
                                 "cli" => all_tools
                                     .into_iter()
-                                    .filter(|t| matches!(t.context, indigo_common::ToolContext::CliInterface | indigo_common::ToolContext::Both))
+                                    .filter(|t| {
+                                        matches!(
+                                            t.context,
+                                            indigo_common::ToolContext::CliInterface
+                                                | indigo_common::ToolContext::Both
+                                        )
+                                    })
                                     .cloned()
                                     .collect(),
                                 _ => all_tools.into_iter().cloned().collect(),
@@ -2174,18 +2234,24 @@ if let Some((name, prompt, _model)) = agent_info {
                         if !tools_for_instructions.is_empty() {
                             final_prompt.push_str("\n\nYou have access to the following tools:\n");
                             for tool in &tools_for_instructions {
-                                final_prompt.push_str(&format!("- {}: {}\n", tool.name, tool.description));
+                                final_prompt
+                                    .push_str(&format!("- {}: {}\n", tool.name, tool.description));
                             }
-                            
-                            final_prompt.push_str("\nTo use a tool, you MUST use this exact format:\n");
-                            final_prompt.push_str("{\"function_name\": \"tool_name\", \"arguments\": {...}}\n\n");
+
+                            final_prompt
+                                .push_str("\nTo use a tool, you MUST use this exact format:\n");
+                            final_prompt.push_str(
+                                "{\"function_name\": \"tool_name\", \"arguments\": {...}}\n\n",
+                            );
                             final_prompt.push_str("Examples:\n");
                             final_prompt.push_str("{\"function_name\": \"list_files\", \"arguments\": {\"path\": \".\"}}\n");
                             final_prompt.push_str("{\"function_name\": \"read_file\", \"arguments\": {\"path\": \"README.md\"}}\n");
                             final_prompt.push_str("{\"function_name\": \"write_file\", \"arguments\": {\"path\": \"test.txt\", \"content\": \"Hello world\"}}\n");
                             final_prompt.push_str("{\"function_name\": \"run_shell\", \"arguments\": {\"command\": \"ls -la\"}}\n\n");
                             final_prompt.push_str("IMPORTANT: Always use the JSON format for tool calls. Do not output raw commands.\n");
-                            final_prompt.push_str("The tool call should be a standalone JSON object on its own line.");
+                            final_prompt.push_str(
+                                "The tool call should be a standalone JSON object on its own line.",
+                            );
                         }
 
                         let system_msg = ChatMessage {
@@ -2218,7 +2284,7 @@ if let Some((name, prompt, _model)) = agent_info {
 
                 println!("{}", prompt_payload);
 
-// --- ROUTING LOGIC ---
+                // --- ROUTING LOGIC ---
                 // Extract model name for multimodal case
                 let model_name = if let Some(agent_id) = &req.agent_id {
                     let agents = state_clone.agents.read().unwrap();
@@ -2238,7 +2304,11 @@ if let Some((name, prompt, _model)) = agent_info {
                         // Get tools to include in request
                         let tools = {
                             let registry = state_clone.tool_registry.read().unwrap();
-                            registry.list_tools().into_iter().map(convert_common_tool_to_protobuf).collect::<Vec<_>>()
+                            registry
+                                .list_tools()
+                                .into_iter()
+                                .map(convert_common_tool_to_protobuf)
+                                .collect::<Vec<_>>()
                         };
 
                         let grpc_req = GrpcInferenceRequest {
@@ -2295,13 +2365,25 @@ if let Some((name, prompt, _model)) = agent_info {
                                             token: s,
                                             status: MessageStatus::Streaming,
                                         };
-                                        let _ = send_json_buffered(&sender_clone, &flush_resp, &mut token_buffer, false).await;
+                                        let _ = send_json_buffered(
+                                            &sender_clone,
+                                            &flush_resp,
+                                            &mut token_buffer,
+                                            false,
+                                        )
+                                        .await;
                                     }
                                     let success_resp = InferenceResponse {
                                         token: "".to_string(),
                                         status: MessageStatus::Success,
                                     };
-                                    let _ = send_json_buffered(&sender_clone, &success_resp, &mut token_buffer, false).await;
+                                    let _ = send_json_buffered(
+                                        &sender_clone,
+                                        &success_resp,
+                                        &mut token_buffer,
+                                        false,
+                                    )
+                                    .await;
                                     break;
                                 }
 
@@ -2320,29 +2402,42 @@ if let Some((name, prompt, _model)) = agent_info {
                                     if let Some(tc) = tool {
                                         // Use the same ToolExecutor as gRPC nodes for consistency
                                         let tool_def = {
-                                             let registry = state_clone.tool_registry.read().unwrap();
-                                             registry.list_tools().into_iter().find(|t| t.name == tc.function.name).cloned()
+                                            let registry =
+                                                state_clone.tool_registry.read().unwrap();
+                                            registry
+                                                .list_tools()
+                                                .into_iter()
+                                                .find(|t| t.name == tc.function.name)
+                                                .cloned()
                                         };
 
                                         let output = if let Some(td) = tool_def {
-                                            let mut executor = state_clone.tool_executor.write().await;
-                                            let args: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                                            let executor = state_clone.tool_executor.write().await;
+                                            let args: serde_json::Value =
+                                                serde_json::from_str(&tc.function.arguments)
+                                                    .unwrap_or_default();
                                             match executor.execute_tool(&td, &args).await {
                                                 Ok(res) => res,
                                                 Err(e) => format!("Error executing tool: {}", e),
                                             }
                                         } else {
-                                             format!("Error: Tool '{}' not found", tc.function.name)
+                                            format!("Error: Tool '{}' not found", tc.function.name)
                                         };
 
                                         let tool_resp = InferenceResponse {
-                                                token: output,
-                                                status: MessageStatus::ToolCall(ToolCallInfo {
-                                                    function_name: tc.function.name.clone(),
-                                                    arguments_json: tc.function.arguments.clone(),
-                                                }),
-                                            };
-                                        let _ = send_json_buffered(&sender_clone, &tool_resp, &mut token_buffer, false).await;
+                                            token: output,
+                                            status: MessageStatus::ToolCall(ToolCallInfo {
+                                                function_name: tc.function.name.clone(),
+                                                arguments_json: tc.function.arguments.clone(),
+                                            }),
+                                        };
+                                        let _ = send_json_buffered(
+                                            &sender_clone,
+                                            &tool_resp,
+                                            &mut token_buffer,
+                                            false,
+                                        )
+                                        .await;
                                     }
                                 }
                             }
@@ -2388,7 +2483,7 @@ if let Some((name, prompt, _model)) = agent_info {
                     }
                 };
 
-println!("Forwarding request to node at: {}", node_address);
+                println!("Forwarding request to node at: {}", node_address);
 
                 // Route to sidecar if address is stdio://local
                 if node_address == "stdio://local" {
@@ -2399,7 +2494,11 @@ println!("Forwarding request to node at: {}", node_address);
                         // Get tools to include in request
                         let tools = {
                             let registry = state_clone.tool_registry.read().unwrap();
-                            registry.list_tools().into_iter().map(convert_common_tool_to_protobuf).collect::<Vec<_>>()
+                            registry
+                                .list_tools()
+                                .into_iter()
+                                .map(convert_common_tool_to_protobuf)
+                                .collect::<Vec<_>>()
                         };
 
                         let grpc_req = GrpcInferenceRequest {
@@ -2416,15 +2515,21 @@ println!("Forwarding request to node at: {}", node_address);
                         let len_bytes = (req_bytes.len() as u32).to_be_bytes();
 
                         if let Err(e) = handle.stdin.write_all(&len_bytes).await {
-                            let _ = send_error(&sender_clone, &format!("Sidecar write error: {}", e)).await;
+                            let _ =
+                                send_error(&sender_clone, &format!("Sidecar write error: {}", e))
+                                    .await;
                             return;
                         }
                         if let Err(e) = handle.stdin.write_all(&req_bytes).await {
-                            let _ = send_error(&sender_clone, &format!("Sidecar write error: {}", e)).await;
+                            let _ =
+                                send_error(&sender_clone, &format!("Sidecar write error: {}", e))
+                                    .await;
                             return;
                         }
                         if let Err(e) = handle.stdin.flush().await {
-                            let _ = send_error(&sender_clone, &format!("Sidecar flush error: {}", e)).await;
+                            let _ =
+                                send_error(&sender_clone, &format!("Sidecar flush error: {}", e))
+                                    .await;
                             return;
                         }
 
@@ -2441,20 +2546,34 @@ println!("Forwarding request to node at: {}", node_address);
                                 break;
                             }
 
-                            if let Ok(resp) = GrpcInferenceResponse::decode(std::io::Cursor::new(msg_buf)) {
+                            if let Ok(resp) =
+                                GrpcInferenceResponse::decode(std::io::Cursor::new(msg_buf))
+                            {
                                 if resp.status == 1 {
                                     if let Some(s) = parser.flush() {
                                         let flush_resp = InferenceResponse {
                                             token: s,
                                             status: MessageStatus::Streaming,
                                         };
-                                        let _ = send_json_buffered(&sender_clone, &flush_resp, &mut token_buffer, false).await;
+                                        let _ = send_json_buffered(
+                                            &sender_clone,
+                                            &flush_resp,
+                                            &mut token_buffer,
+                                            false,
+                                        )
+                                        .await;
                                     }
                                     let success_resp = InferenceResponse {
                                         token: "".to_string(),
                                         status: MessageStatus::Success,
                                     };
-                                    let _ = send_json_buffered(&sender_clone, &success_resp, &mut token_buffer, false).await;
+                                    let _ = send_json_buffered(
+                                        &sender_clone,
+                                        &success_resp,
+                                        &mut token_buffer,
+                                        false,
+                                    )
+                                    .await;
                                     break;
                                 }
 
@@ -2465,42 +2584,62 @@ println!("Forwarding request to node at: {}", node_address);
                                             token: t,
                                             status: MessageStatus::Streaming,
                                         };
-                                        let _ = send_json_buffered(&sender_clone, &text_resp, &mut token_buffer, false).await;
+                                        let _ = send_json_buffered(
+                                            &sender_clone,
+                                            &text_resp,
+                                            &mut token_buffer,
+                                            false,
+                                        )
+                                        .await;
                                     }
                                     if let Some(tc) = tool {
                                         // Use the same ToolExecutor as gRPC nodes for consistency
                                         let tool_def = {
-                                             let registry = state_clone.tool_registry.read().unwrap();
-                                             registry.list_tools().into_iter().find(|t| t.name == tc.function.name).cloned()
+                                            let registry =
+                                                state_clone.tool_registry.read().unwrap();
+                                            registry
+                                                .list_tools()
+                                                .into_iter()
+                                                .find(|t| t.name == tc.function.name)
+                                                .cloned()
                                         };
 
                                         println!("SIDECAR_TOOL_EXECUTION: Executing tool '{}' via ToolExecutor", tc.function.name);
                                         let output = if let Some(td) = tool_def {
-                                            let mut executor = state_clone.tool_executor.write().await;
-                                            let args: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                                            let executor = state_clone.tool_executor.write().await;
+                                            let args: serde_json::Value =
+                                                serde_json::from_str(&tc.function.arguments)
+                                                    .unwrap_or_default();
                                             match executor.execute_tool(&td, &args).await {
                                                 Ok(res) => res,
                                                 Err(e) => format!("Error executing tool: {}", e),
                                             }
                                         } else {
-                                             format!("Error: Tool '{}' not found", tc.function.name)
+                                            format!("Error: Tool '{}' not found", tc.function.name)
                                         };
 
                                         let tool_resp = InferenceResponse {
-                                                token: output,
-                                                status: MessageStatus::ToolCall(ToolCallInfo {
-                                                    function_name: tc.function.name.clone(),
-                                                    arguments_json: tc.function.arguments.clone(),
-                                                }),
-                                            };
-                                        let _ = send_json_buffered(&sender_clone, &tool_resp, &mut token_buffer, false).await;
+                                            token: output,
+                                            status: MessageStatus::ToolCall(ToolCallInfo {
+                                                function_name: tc.function.name.clone(),
+                                                arguments_json: tc.function.arguments.clone(),
+                                            }),
+                                        };
+                                        let _ = send_json_buffered(
+                                            &sender_clone,
+                                            &tool_resp,
+                                            &mut token_buffer,
+                                            false,
+                                        )
+                                        .await;
                                     }
                                 }
                             }
                         }
                         return; // Done with Sidecar
                     } else {
-                        let _ = send_error(&sender_clone, "Sidecar not running but requested").await;
+                        let _ =
+                            send_error(&sender_clone, "Sidecar not running but requested").await;
                         return;
                     }
                 }
@@ -2520,10 +2659,14 @@ println!("Forwarding request to node at: {}", node_address);
                 // Get tools to include in request
                 let tools = {
                     let registry = state_clone.tool_registry.read().unwrap();
-                    registry.list_tools().into_iter().map(convert_common_tool_to_protobuf).collect::<Vec<_>>()
+                    registry
+                        .list_tools()
+                        .into_iter()
+                        .map(convert_common_tool_to_protobuf)
+                        .collect::<Vec<_>>()
                 };
 
- let grpc_req = tonic::Request::new(GrpcInferenceRequest {
+                let grpc_req = tonic::Request::new(GrpcInferenceRequest {
                     prompt: prompt_payload,
                     max_tokens: req.max_tokens as u32,
                     temperature: req.temperature,
@@ -2569,27 +2712,40 @@ println!("Forwarding request to node at: {}", node_address);
                             // Check for status-based tool call (from gRPC)
                             if let MessageStatus::ToolCall(info) = status {
                                 let tool_def = {
-                                     let registry = state_clone.tool_registry.read().unwrap();
-                                     registry.list_tools().into_iter().find(|t| t.name == info.function_name).cloned()
+                                    let registry = state_clone.tool_registry.read().unwrap();
+                                    registry
+                                        .list_tools()
+                                        .into_iter()
+                                        .find(|t| t.name == info.function_name)
+                                        .cloned()
                                 };
 
                                 println!("GRPC_TOOL_EXECUTION: Executing tool '{}' via ToolExecutor (status-based)", info.function_name);
                                 let output = if let Some(td) = tool_def {
-                                    let mut executor = state_clone.tool_executor.write().await;
-                                    let args: serde_json::Value = serde_json::from_str(&info.arguments_json).unwrap_or_default();
+                                    let executor = state_clone.tool_executor.write().await;
+                                    let args: serde_json::Value =
+                                        serde_json::from_str(&info.arguments_json)
+                                            .unwrap_or_default();
                                     match executor.execute_tool(&td, &args).await {
                                         Ok(res) => res,
                                         Err(e) => format!("Error executing tool: {}", e),
                                     }
                                 } else {
-                                     format!("Error: Tool '{}' not found", info.function_name)
+                                    format!("Error: Tool '{}' not found", info.function_name)
                                 };
 
                                 let tool_resp = InferenceResponse {
                                     token: format!("\n\n[Agent Output]: {}\n", output),
                                     status: MessageStatus::Streaming,
                                 };
-                                if let Err(_) = send_json_buffered(&sender_clone, &tool_resp, &mut token_buffer, false).await {
+                                if let Err(_) = send_json_buffered(
+                                    &sender_clone,
+                                    &tool_resp,
+                                    &mut token_buffer,
+                                    false,
+                                )
+                                .await
+                                {
                                     break;
                                 }
                                 continue;
@@ -2602,26 +2758,39 @@ println!("Forwarding request to node at: {}", node_address);
                                         token: t,
                                         status: MessageStatus::Streaming,
                                     };
-                                    if let Err(_) = send_json_buffered(&sender_clone, &resp, &mut token_buffer, false).await {
+                                    if let Err(_) = send_json_buffered(
+                                        &sender_clone,
+                                        &resp,
+                                        &mut token_buffer,
+                                        false,
+                                    )
+                                    .await
+                                    {
                                         break;
                                     }
                                 }
                                 if let Some(tc) = tool {
                                     let tool_def = {
-                                         let registry = state_clone.tool_registry.read().unwrap();
-                                         registry.list_tools().into_iter().find(|t| t.name == tc.function.name).cloned()
+                                        let registry = state_clone.tool_registry.read().unwrap();
+                                        registry
+                                            .list_tools()
+                                            .into_iter()
+                                            .find(|t| t.name == tc.function.name)
+                                            .cloned()
                                     };
 
                                     println!("GRPC_TOOL_EXECUTION: Executing tool '{}' via ToolExecutor (text-based)", tc.function.name);
                                     let output = if let Some(td) = tool_def {
-                                        let mut executor = state_clone.tool_executor.write().await;
-                                        let args: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                                        let executor = state_clone.tool_executor.write().await;
+                                        let args: serde_json::Value =
+                                            serde_json::from_str(&tc.function.arguments)
+                                                .unwrap_or_default();
                                         match executor.execute_tool(&td, &args).await {
                                             Ok(res) => res,
                                             Err(e) => format!("Error executing tool: {}", e),
                                         }
                                     } else {
-                                         format!("Error: Tool '{}' not found", tc.function.name)
+                                        format!("Error: Tool '{}' not found", tc.function.name)
                                     };
 
                                     let tool_resp = InferenceResponse {
@@ -2643,7 +2812,7 @@ println!("Forwarding request to node at: {}", node_address);
                             send_error(&sender_clone, &format!("Inference failed: {}", e)).await;
                     }
                 }
-                
+
                 // Final buffer flush to ensure no tokens are left behind
                 if !token_buffer.is_empty() {
                     let final_flush = InferenceResponse {
@@ -2725,7 +2894,7 @@ async fn send_json_buffered(
             } else {
                 // Add to buffer
                 buffer.add_token(&resp.token);
-                
+
                 // Check if we should flush
                 if buffer.should_flush(false) {
                     let flush_resp = InferenceResponse {
@@ -2789,10 +2958,14 @@ async fn trigger_inference(
     // Get tools to include in request
     let tools = {
         let registry = state.tool_registry.read().unwrap();
-        registry.list_tools().into_iter().map(convert_common_tool_to_protobuf).collect::<Vec<_>>()
+        registry
+            .list_tools()
+            .into_iter()
+            .map(convert_common_tool_to_protobuf)
+            .collect::<Vec<_>>()
     };
 
- let request = tonic::Request::new(GrpcInferenceRequest {
+    let request = tonic::Request::new(GrpcInferenceRequest {
         prompt: payload.prompt,
         max_tokens: payload.max_tokens as u32,
         temperature: payload.temperature,

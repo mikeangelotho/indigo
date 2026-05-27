@@ -1,14 +1,75 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* ═══════════════════════════════════════════════
+   NEURAL GRID THEME — PULSE Design System
+   ═══════════════════════════════════════════════ */
+
 @layer base {
   :root {
     color-scheme: dark;
+
+    /* Core palette — PULSE Neural Grid */
+    --ng-bg-deep: #0a0a0f;
+    --ng-bg-base: #0d0d14;
+    --ng-bg-surface: #12121c;
+    --ng-bg-elevated: #1a1a28;
+    --ng-bg-hover: #222236;
+
+    --ng-border: #1e1e30;
+    --ng-border-hover: #2a2a44;
+    --ng-border-active: #00f0ff44;
+
+    /* Accents */
+    --ng-cyan: #00f0ff;
+    --ng-cyan-dim: #00a0aa;
+    --ng-cyan-glow: #00f0ff22;
+    --ng-cyan-glow-strong: #00f0ff44;
+
+    --ng-magenta: #ff00aa;
+    --ng-magenta-dim: #aa0077;
+    --ng-magenta-glow: #ff00aa22;
+    --ng-magenta-glow-strong: #ff00aa44;
+
+    /* Text */
+    --ng-text-primary: #e8e8f0;
+    --ng-text-secondary: #8888a8;
+    --ng-text-muted: #555570;
+    --ng-text-label: #6a6a88;
+
+    /* Status */
+    --ng-online: #00ff88;
+    --ng-online-glow: #00ff8822;
+    --ng-warning: #ffaa00;
+    --ng-warning-glow: #ffaa0022;
+    --ng-offline: #ff4466;
+    --ng-offline-glow: #ff446622;
+
+    /* Gradients */
+    --ng-gradient-hero: linear-gradient(135deg, #00f0ff11 0%, #ff00aa08 50%, transparent 100%);
+    --ng-gradient-card: linear-gradient(180deg, #12121c 0%, #0d0d14 100%);
+    --ng-gradient-border: linear-gradient(135deg, #00f0ff44, #ff00aa44);
+
+    /* Angular clip-paths (cut corners) */
+    --ng-clip-card: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+    --ng-clip-card-sm: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+    --ng-clip-badge: polygon(4px 0, calc(100% - 4px) 0, 100% 50%, calc(100% - 4px) 100%, 4px 100%, 0 50%);
+
+    /* Transitions */
+    --ng-transition: 200ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   body {
-    @apply bg-black text-zinc-200 antialiased;
+    background: var(--ng-bg-deep);
+    color: var(--ng-text-primary);
+    font-family: 'Inter', 'JetBrains Mono', system-ui, sans-serif;
     font-feature-settings: "ss01", "ss02", "cv01", "cv02";
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Monospace for data/labels */
+  .font-data {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
   }
 
   /* Custom Scrollbar */
@@ -16,58 +77,280 @@
     width: 6px;
     height: 6px;
   }
-
   .custom-scrollbar::-webkit-scrollbar-track {
     background: transparent;
   }
-
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    @apply bg-zinc-800 rounded-full;
+    background: var(--ng-border);
+    border-radius: 3px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: var(--ng-border-hover);
   }
 
-  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    @apply bg-zinc-700;
+  /* ═══════════════════════════════════════════════
+     NEURAL GRID BACKGROUND
+     ═══════════════════════════════════════════════ */
+  .neural-bg {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background:
+      /* Subtle grid */
+      linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px),
+      /* Gradient wash */
+      radial-gradient(ellipse at 20% 0%, rgba(0, 240, 255, 0.06) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 100%, rgba(255, 0, 170, 0.04) 0%, transparent 50%),
+      /* Base */
+      var(--ng-bg-deep);
+    background-size: 60px 60px, 60px 60px, 100% 100%, 100% 100%, 100% 100%;
+    animation: neural-grid-shift 20s linear infinite;
+  }
+
+  @keyframes neural-grid-shift {
+    0% { background-position: 0 0, 0 0, 0 0, 0 0, 0 0; }
+    100% { background-position: 60px 60px, 60px 60px, 0 0, 0 0, 0 0; }
+  }
+
+  /* Scanline overlay */
+  .neural-bg::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.03) 2px,
+      rgba(0, 0, 0, 0.03) 4px
+    );
+    pointer-events: none;
   }
 }
 
 @layer components {
+  /* ═══════════════════════════════════════════════
+     ANGULAR CARDS (PULSE clip-path style)
+     ═══════════════════════════════════════════════ */
+
+  .ng-card {
+    position: relative;
+    background: var(--ng-gradient-card);
+    border: 1px solid var(--ng-border);
+    clip-path: var(--ng-clip-card);
+    transition: border-color var(--ng-transition), box-shadow var(--ng-transition);
+  }
+  .ng-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border: 1px solid transparent;
+    clip-path: var(--ng-clip-card);
+    background: var(--ng-gradient-border);
+    opacity: 0;
+    transition: opacity var(--ng-transition);
+    pointer-events: none;
+  }
+  .ng-card:hover::before {
+    opacity: 1;
+  }
+  .ng-card:hover {
+    border-color: var(--ng-cyan-dim);
+    box-shadow: 0 0 20px var(--ng-cyan-glow);
+  }
+
+  .ng-card-sm {
+    clip-path: var(--ng-clip-card-sm);
+  }
+  .ng-card-sm::before {
+    clip-path: var(--ng-clip-card-sm);
+  }
+
+  /* Solid fallback for browsers that need it */
+  .ng-card-solid {
+    background: var(--ng-bg-surface);
+    border: 1px solid var(--ng-border);
+    transition: border-color var(--ng-transition), box-shadow var(--ng-transition);
+  }
+  .ng-card-solid:hover {
+    border-color: var(--ng-cyan-dim);
+    box-shadow: 0 0 20px var(--ng-cyan-glow);
+  }
+
+  /* ═══════════════════════════════════════════════
+     BUTTONS
+     ═══════════════════════════════════════════════ */
+
   .btn-primary {
-    @apply px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+    position: relative;
+    padding: 0.5rem 1.25rem;
+    background: linear-gradient(135deg, var(--ng-cyan-dim), #0088aa);
+    color: #000;
+    font-weight: 600;
+    font-size: 0.875rem;
+    clip-path: var(--ng-clip-card-sm);
+    transition: all var(--ng-transition);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .btn-primary:hover {
+    background: linear-gradient(135deg, var(--ng-cyan), #00aacc);
+    box-shadow: 0 0 20px var(--ng-cyan-glow-strong);
+    transform: translateY(-1px);
+  }
+  .btn-primary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
   }
 
   .btn-secondary {
-    @apply px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded font-medium transition-colors;
+    padding: 0.5rem 1.25rem;
+    background: var(--ng-bg-elevated);
+    border: 1px solid var(--ng-border);
+    color: var(--ng-text-primary);
+    font-weight: 500;
+    font-size: 0.875rem;
+    clip-path: var(--ng-clip-card-sm);
+    transition: all var(--ng-transition);
+  }
+  .btn-secondary:hover {
+    background: var(--ng-bg-hover);
+    border-color: var(--ng-border-hover);
   }
 
   .btn-danger {
-    @apply px-4 py-2 text-red-400 hover:bg-red-950/30 rounded transition-colors;
+    padding: 0.5rem 1.25rem;
+    color: var(--ng-offline);
+    font-size: 0.875rem;
+    transition: all var(--ng-transition);
+  }
+  .btn-danger:hover {
+    background: var(--ng-offline-glow);
   }
 
-  .card {
-    @apply bg-zinc-900 border border-zinc-800 rounded-lg p-6;
-  }
+  /* ═══════════════════════════════════════════════
+     FORM ELEMENTS
+     ═══════════════════════════════════════════════ */
 
   .label {
-    @apply block text-sm font-medium text-zinc-400 mb-1;
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--ng-text-label);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.25rem;
   }
 
   .input-field {
-    @apply w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-white focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/50;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    background: var(--ng-bg-deep);
+    border: 1px solid var(--ng-border);
+    color: var(--ng-text-primary);
+    font-size: 0.875rem;
+    transition: border-color var(--ng-transition), box-shadow var(--ng-transition);
+  }
+  .input-field:focus {
+    outline: none;
+    border-color: var(--ng-cyan-dim);
+    box-shadow: 0 0 0 2px var(--ng-cyan-glow);
   }
 
+  /* ═══════════════════════════════════════════════
+     BADGES & STATUS
+     ═══════════════════════════════════════════════ */
+
   .status-badge {
-    @apply text-xs font-medium px-2 py-0.5 rounded border;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 0.125rem 0.5rem;
+    clip-path: var(--ng-clip-badge);
   }
 
   .status-online {
-    @apply bg-green-900/30 text-green-400 border-green-800;
+    background: var(--ng-online-glow);
+    color: var(--ng-online);
+    border: 1px solid #00ff8833;
+  }
+  .status-online::before {
+    content: '';
+    width: 4px;
+    height: 4px;
+    background: var(--ng-online);
+    border-radius: 50%;
+    animation: pulse-dot 2s ease-in-out infinite;
   }
 
+  .status-warning {
+    background: var(--ng-warning-glow);
+    color: var(--ng-warning);
+    border: 1px solid #ffaa0033;
+  }
+  .status-warning::before {
+    content: '';
+    width: 4px;
+    height: 4px;
+    background: var(--ng-warning);
+    border-radius: 50%;
+  }
+
+  .status-offline {
+    background: var(--ng-offline-glow);
+    color: var(--ng-offline);
+    border: 1px solid #ff446633;
+  }
+  .status-offline::before {
+    content: '';
+    width: 4px;
+    height: 4px;
+    background: var(--ng-offline);
+    border-radius: 50%;
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  /* ═══════════════════════════════════════════════
+     GLOW ACCENTS
+     ═══════════════════════════════════════════════ */
+
+  .glow-cyan {
+    box-shadow: 0 0 15px var(--ng-cyan-glow), 0 0 30px var(--ng-cyan-glow);
+  }
+  .glow-magenta {
+    box-shadow: 0 0 15px var(--ng-magenta-glow), 0 0 30px var(--ng-magenta-glow);
+  }
+
+  /* Corner accent lines (PULSE style) */
+  .corner-accent {
+    position: relative;
+  }
+  .corner-accent::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 20px;
+    height: 2px;
+    background: var(--ng-gradient-border);
+  }
+
+  /* Cursor blink (terminal style) */
   .cursor-blink {
     display: inline-block;
     width: 2px;
     height: 1.1em;
-    background-color: #6366f1; /* indigo-500 */
+    background-color: var(--ng-cyan);
     margin-left: 2px;
     vertical-align: middle;
     animation: blink 1s step-end infinite;
@@ -77,4 +360,54 @@
     from, to { opacity: 1; }
     50% { opacity: 0; }
   }
+
+  /* Data stream animation */
+  .data-stream {
+    background: linear-gradient(180deg, transparent, var(--ng-cyan-glow), transparent);
+    animation: stream-flow 3s ease-in-out infinite;
+  }
+
+  @keyframes stream-flow {
+    0%, 100% { opacity: 0.3; transform: translateY(-100%); }
+    50% { opacity: 0.8; transform: translateY(100%); }
+  }
+
+  /* ═══════════════════════════════════════════════
+     SECTION HEADERS (PULSE style)
+     ═══════════════════════════════════════════════ */
+
+  .ng-section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--ng-cyan-dim);
+  }
+  .ng-section-header::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--ng-cyan-dim), transparent);
+  }
+}
+
+@layer utilities {
+  /* Tailwind color overrides via CSS custom properties */
+  .text-cyan-ng { color: var(--ng-cyan); }
+  .text-magenta-ng { color: var(--ng-magenta); }
+  .text-online { color: var(--ng-online); }
+  .text-warning { color: var(--ng-warning); }
+  .text-offline { color: var(--ng-offline); }
+
+  .bg-cyan-ng { background-color: var(--ng-cyan); }
+  .bg-magenta-ng { background-color: var(--ng-magenta); }
+
+  .border-cyan-ng { border-color: var(--ng-cyan); }
+  .border-magenta-ng { border-color: var(--ng-magenta); }
+  .border-ng { border-color: var(--ng-border); }
+
+  .ring-cyan-ng { --tw-ring-color: var(--ng-cyan); }
 }

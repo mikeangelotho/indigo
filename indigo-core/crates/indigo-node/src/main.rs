@@ -427,12 +427,22 @@ impl InferenceService for MyInferenceService {
                 }
             }
             "glob" | "list_files" => {
-                let pattern = args
+                let input = args
                     .get("pattern")
                     .or_else(|| args.get("path"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("*");
-                match glob(pattern) {
+                // If input is a directory path, expand to glob its contents
+                let pattern = if std::path::Path::new(input).is_dir() {
+                    if input.ends_with('/') || input.ends_with('\\') {
+                        format!("{}*", input)
+                    } else {
+                        format!("{}/*", input)
+                    }
+                } else {
+                    input.to_string()
+                };
+                match glob(&pattern) {
                     Ok(paths) => {
                         let names: Vec<String> = paths
                             .filter_map(|entry| entry.ok().map(|p| p.display().to_string()))

@@ -29,19 +29,16 @@ export default function SpawnNode(props: SpawnNodeProps) {
     gpu_layers: 0,
   });
 
-  // Auto-select mmproj when model changes
   createEffect(() => {
     const modelFile = spawnConfig().model_file;
     if (!modelFile || !props.models()) {
       return;
     }
 
-    // Heuristic: Extract the base model name by removing common quantization suffixes
     const baseName = modelFile
       .replace(/-[qf]\d{1,2}(_[a-z0-9_]{1,4})?\.gguf$/i, "")
       .replace(/\.gguf$/, "");
 
-    // Find a corresponding mmproj file
     const mmprojFile = props
       .models()
       ?.find(
@@ -119,61 +116,38 @@ export default function SpawnNode(props: SpawnNodeProps) {
   };
 
   return (
-    <div class="bg-zinc-900/50 backdrop-blur border border-zinc-800 rounded-xl p-6 sticky top-6 shadow-xl shadow-black/50">
-      <div class="flex items-center gap-2 mb-6 text-indigo-400">
-        <Power size={20} />
-        <h2 class="text-lg font-semibold text-white">Initialize Node</h2>
+    <div class="ng-card p-5 sticky top-6">
+      <div class="flex items-center gap-2 mb-5 text-cyan-ng">
+        <Power size={16} />
+        <h2 class="text-sm font-bold text-white font-data uppercase tracking-widest">Initialize Node</h2>
       </div>
 
       {/* MODE SELECT */}
-      <div class="flex bg-zinc-950 p-1 rounded-lg mb-6 border border-zinc-800">
-        <button
-          type="button"
-          class={`flex-1 text-xs font-medium py-2 rounded-md transition-all ${
-            mode() === "local"
-              ? "bg-zinc-800 text-white shadow-sm"
-              : "text-zinc-500 hover:text-zinc-300"
-          }`}
-          onClick={() => setMode("local")}
-        >
-          Local File
-        </button>
-
-        <button
-          type="button"
-          class={`flex-1 text-xs font-medium py-2 rounded-md transition-all ${
-            mode() === "active"
-              ? "bg-zinc-800 text-white shadow-sm"
-              : "text-zinc-500 hover:text-zinc-300"
-          }`}
-          onClick={() => setMode("active")}
-        >
-          Clone
-        </button>
-
-        <button
-          type="button"
-          class={`flex-1 text-xs font-medium py-2 rounded-md transition-all ${
-            mode() === "hf"
-              ? "bg-zinc-800 text-white shadow-sm"
-              : "text-zinc-500 hover:text-zinc-300"
-          }`}
-          onClick={() => setMode("hf")}
-        >
-          HuggingFace
-        </button>
+      <div class="flex bg-ng-bg-deep p-1 border border-ng mb-5" style="clip-path: var(--ng-clip-card-sm)">
+        {(["local", "active", "hf"] as const).map((m) => (
+          <button
+            type="button"
+            class={`flex-1 text-[10px] font-bold uppercase tracking-wider py-1.5 transition-all font-data ${
+              mode() === m
+                ? "text-cyan-ng"
+                : "text-ng-muted hover:text-ng-secondary"
+            }`}
+            style={mode() === m ? "clip-path: var(--ng-clip-card-sm); background: var(--ng-bg-elevated)" : ""}
+            onClick={() => setMode(m)}
+          >
+            {m === "local" ? "Local" : m === "active" ? "Clone" : "HF"}
+          </button>
+        ))}
       </div>
 
-      <form onSubmit={spawnNode} class="space-y-5">
+      <form onSubmit={spawnNode} class="space-y-4">
         {/* PORT */}
-        <div class="space-y-1.5">
-          <label class="text-xs font-mono uppercase text-zinc-500">
-            Port Allocation
-          </label>
+        <div class="space-y-1">
+          <label class="label">Port Allocation</label>
           <input
             type="number"
             required
-            class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5 text-white focus:border-indigo-500 outline-none transition-all font-mono"
+            class="input-field font-data text-sm"
             value={spawnConfig().port}
             onInput={(e) =>
               setSpawnConfig({
@@ -186,13 +160,11 @@ export default function SpawnNode(props: SpawnNodeProps) {
 
         {/* LOCAL */}
         <Show when={mode() === "local"}>
-          <div class="space-y-1.5">
-            <label class="text-xs font-mono uppercase text-zinc-500">
-              Model File
-            </label>
+          <div class="space-y-1">
+            <label class="label">Model File</label>
             <select
               required
-              class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5 text-white focus:border-indigo-500 outline-none transition-all"
+              class="input-field"
               value={spawnConfig().model_file}
               onChange={(e) =>
                 setSpawnConfig({
@@ -210,12 +182,10 @@ export default function SpawnNode(props: SpawnNodeProps) {
             </select>
           </div>
 
-          <div class="space-y-1.5">
-            <label class="text-xs font-mono uppercase text-zinc-500">
-              Multimodal Projector (Optional)
-            </label>
+          <div class="space-y-1">
+            <label class="label">Multimodal Projector (Optional)</label>
             <select
-              class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5 text-white focus:border-indigo-500 outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              class="input-field disabled:opacity-50 disabled:cursor-not-allowed"
               value={spawnConfig().mmproj_file}
               disabled={(() => {
                 const m = spawnConfig().model_file.toLowerCase();
@@ -263,13 +233,11 @@ export default function SpawnNode(props: SpawnNodeProps) {
 
         {/* ACTIVE */}
         <Show when={mode() === "active"}>
-          <div class="space-y-1.5">
-            <label class="text-xs font-mono uppercase text-zinc-500">
-              Source Node
-            </label>
+          <div class="space-y-1">
+            <label class="label">Source Node</label>
             <select
               required
-              class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5 text-white focus:border-indigo-500 outline-none transition-all"
+              class="input-field"
               value={spawnConfig().model_file}
               onChange={(e) =>
                 setSpawnConfig({
@@ -287,7 +255,7 @@ export default function SpawnNode(props: SpawnNodeProps) {
             </select>
 
             <Show when={props.activeHostModels().length === 0}>
-              <p class="text-[10px] text-amber-500 flex items-center gap-1">
+              <p class="text-[10px] text-warning flex items-center gap-1 font-data">
                 <Activity size={10} />
                 No local nodes running.
               </p>
@@ -297,14 +265,12 @@ export default function SpawnNode(props: SpawnNodeProps) {
 
         {/* HUGGINGFACE */}
         <Show when={mode() === "hf"}>
-          <div class="space-y-1.5">
-            <label class="text-xs font-mono uppercase text-zinc-500">
-              Repository ID
-            </label>
+          <div class="space-y-1">
+            <label class="label">Repository ID</label>
             <input
               type="text"
               required
-              class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5 text-white focus:border-indigo-500 outline-none transition-all text-sm"
+              class="input-field font-data text-xs"
               placeholder="microsoft/Phi-3-mini-4k-instruct-gguf"
               value={spawnConfig().model_repo}
               onInput={(e) =>
@@ -316,14 +282,12 @@ export default function SpawnNode(props: SpawnNodeProps) {
             />
           </div>
 
-          <div class="space-y-1.5">
-            <label class="text-xs font-mono uppercase text-zinc-500">
-              Filename
-            </label>
+          <div class="space-y-1">
+            <label class="label">Filename</label>
             <input
               type="text"
               required
-              class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5 text-white focus:border-indigo-500 outline-none transition-all text-sm"
+              class="input-field font-data text-xs"
               placeholder="Phi-3-mini-4k-instruct-q4.gguf"
               value={spawnConfig().model_file}
               onInput={(e) =>
@@ -337,10 +301,8 @@ export default function SpawnNode(props: SpawnNodeProps) {
         </Show>
 
         {/* GPU */}
-        <div class="space-y-1.5">
-          <label class="text-xs font-mono uppercase text-zinc-500">
-            GPU Offload
-          </label>
+        <div class="space-y-1">
+          <label class="label">GPU Offload</label>
             <ToggleButton
               levels={["None", "Low", "High", "Max"]}
               selectedLevel="None"
@@ -352,14 +314,14 @@ export default function SpawnNode(props: SpawnNodeProps) {
         <button
           type="submit"
           disabled={isSpawning()}
-          class="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-3 rounded-lg shadow-lg shadow-indigo-900/20 transition-all flex items-center justify-center gap-2 group"
+          class="btn-primary w-full flex items-center justify-center gap-2 group py-3"
         >
-          <Show when={!isSpawning()} fallback={<span>Initializing...</span>}>
+          <Show when={!isSpawning()} fallback={<span class="font-data text-xs uppercase tracking-wider">Initializing...</span>}>
             <Play
-              size={18}
-              class="group-hover:text-green-300 transition-colors"
+              size={16}
+              class="group-hover:text-emerald-300 transition-colors"
             />
-            Launch Node
+            <span class="font-data text-xs uppercase tracking-wider">Launch Node</span>
           </Show>
         </button>
       </form>
@@ -408,22 +370,23 @@ const ToggleButton = (props: ToggleButtonProps) => {
   });
 
   return (
-    <div class="flex justify-between items-center gap-3 flex-wrap">
+    <div class="flex justify-between items-center gap-2 flex-wrap">
       {props.levels.map((lvl) => (
         <button
           type="button"
-          class={`px-4 py-2 rounded-lg font-medium transition-all duration-200 border ${
+          class={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider font-data transition-all duration-200 border ${
             level() === lvl
-              ? "bg-indigo-900 text-white border-indigo-900"
-              : "bg-indigo-500/10 text-gray-700 border-indigo-500/30"
+              ? "text-cyan-ng border-cyan-ng/40"
+              : "text-ng-muted border-ng hover:border-ng-border-hover hover:text-ng-secondary"
           }`}
+          style={level() === lvl ? "clip-path: var(--ng-clip-card-sm); background: var(--ng-cyan-glow)" : "clip-path: var(--ng-clip-card-sm)"}
           onClick={() => {
             setLevel(lvl);
             let gpuLayers = 0;
             if (lvl === "Low") gpuLayers = 16;
             else if (lvl === "High") gpuLayers = 32;
             else if (lvl === "Max") gpuLayers = 64;
-            
+
             props.spawnConfig.set({
               ...props.spawnConfig.get(),
               gpu_layers: gpuLayers,

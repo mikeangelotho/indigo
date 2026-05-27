@@ -12,22 +12,22 @@ interface ChatSidebarProps {
 
 export default function ChatSidebar(props: ChatSidebarProps) {
   return (
-    <div class="w-64 bg-zinc-950 border-r border-zinc-800 flex flex-col h-full">
-      <div class="p-4 border-b border-zinc-800">
+    <div class="w-64 bg-ng-bg-deep border-r border-ng flex flex-col h-full">
+      <div class="p-3 border-b border-ng">
         <button
           onClick={props.onNew}
-          class="w-full flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white py-2 px-4 rounded-md transition-colors font-medium text-sm"
+          class="btn-primary w-full flex items-center justify-center gap-2 text-xs py-2"
         >
-          <Plus size={16} />
+          <Plus size={14} />
           New Chat
         </button>
       </div>
-      
+
       <div class="flex-1 overflow-y-auto py-2">
-        <Show 
+        <Show
             when={props.conversations.length > 0}
             fallback={
-                <div class="px-4 py-8 text-center text-zinc-600 text-sm">
+                <div class="px-4 py-8 text-center text-ng-muted text-xs font-data">
                     No history yet.
                 </div>
             }
@@ -38,13 +38,14 @@ export default function ChatSidebar(props: ChatSidebarProps) {
                     <div class="group relative">
                         <button
                             onClick={() => props.onSelect(conv.id)}
-                            class={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center gap-2 pr-8 ${
+                            class={`w-full text-left px-3 py-2 text-xs font-data transition-colors flex items-center gap-2 pr-8 ${
                                 props.activeId === conv.id
-                                ? "bg-zinc-800 text-white"
-                                : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+                                ? "text-cyan-ng border border-cyan-ng/20"
+                                : "text-ng-secondary hover:bg-ng-bg-hover hover:text-ng-primary border border-transparent"
                             }`}
+                            style={props.activeId === conv.id ? "clip-path: var(--ng-clip-card-sm)" : ""}
                         >
-                            <MessageSquare size={14} class="shrink-0 opacity-70" />
+                            <MessageSquare size={12} class="shrink-0 opacity-70" />
                             <span class="truncate">{conv.title || "New Chat"}</span>
                         </button>
                         <button
@@ -52,10 +53,10 @@ export default function ChatSidebar(props: ChatSidebarProps) {
                                 e.stopPropagation();
                                 props.onDelete(conv.id);
                             }}
-                            class="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-400 p-1 rounded"
+                            class="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 text-ng-muted hover:text-offline p-1"
                             title="Delete Chat"
                         >
-                            <Trash2 size={12} />
+                            <Trash2 size={11} />
                         </button>
                     </div>
                 )}
